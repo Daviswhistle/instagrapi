@@ -8,8 +8,7 @@ import sys
 import threading
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
-from tkinter import TclError, Tk, messagebox
-from tkinter import ttk
+from tkinter import TclError, Tk, messagebox, ttk
 
 from apps.following_auto_liker.engine import AutoLikerError, FollowingAutoLiker
 from apps.following_auto_liker.storage import AppConfig, Storage, parse_iso_datetime

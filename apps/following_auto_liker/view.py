@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from tkinter import IntVar, StringVar
-from tkinter import scrolledtext, ttk
+from tkinter import IntVar, StringVar, scrolledtext, ttk
 
 APP_TITLE = "팔로잉 자동 좋아요"
 

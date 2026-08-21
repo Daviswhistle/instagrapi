@@ -1,229 +1,175 @@
 from __future__ import annotations
 
-import tempfile
+import random
+import threading
 import unittest
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
-from types import SimpleNamespace
+from dataclasses import dataclass
 
-from apps.following_auto_liker.engine import FollowingAutoLiker
-from apps.following_auto_liker.storage import AppConfig, AppPaths, Storage
-
-
-class FixedRandom:
-    def __init__(self, probability_value: float = 0.0):
-        self.probability_value = probability_value
-
-    def random(self) -> float:
-        return self.probability_value
-
-    @staticmethod
-    def randint(start: int, _end: int) -> int:
-        return start
+from apps.following_auto_liker.engine import (
+    FollowingFeedScanner,
+    InstagramRestrictionError,
+    normalize_post_key,
+)
+from apps.following_auto_liker.storage import AppConfig
 
 
-class FakeClient:
-    def __init__(self, feed_items: list[dict], following_ids: list[str]):
-        self.user_id = "999"
-        self.feed_items = feed_items
-        self.following_ids = following_ids
-        self.liked: list[str] = []
-        self.fail_ids: set[str] = set()
+@dataclass
+class FakePost:
+    key: str
+    username: str = "friend"
+    state: str = "unliked"
+    exclusion_reason: str | None = None
+    succeeds: bool = True
+    clicks: int = 0
+    after_click: object = None
 
-    def get_timeline_feed(self, reason: str = "pull_to_refresh", **_kwargs):
-        return {"feed_items": self.feed_items, "more_available": False, "reason": reason}
+    @property
+    def like_state(self):
+        return self.state
 
-    def iter_user_following_v1(self, _user_id: str, amount: int = 0, page_size: int = 200):
-        del amount, page_size
-        for user_id in self.following_ids:
-            yield SimpleNamespace(pk=user_id, username=f"user{user_id}")
+    def click_like(self) -> bool:
+        self.clicks += 1
+        if callable(self.after_click):
+            self.after_click()
+        if self.succeeds:
+            self.state = "liked"
+            return True
+        return False
 
-    def media_like(self, media_id: str) -> bool:
-        if media_id in self.fail_ids:
-            raise RuntimeError("temporary failure")
-        self.liked.append(media_id)
+
+class FakeFeed:
+    def __init__(self, pages, *, caught_up_at=None):
+        self.pages = pages
+        self.index = 0
+        self.open_count = 0
+        self.restriction = None
+        self.caught_up_at = caught_up_at
+
+    def open_following(self):
+        self.open_count += 1
+        self.index = 0
+
+    def posts(self):
+        return list(self.pages[self.index])
+
+    def scroll_for_more(self):
+        if self.index + 1 >= len(self.pages):
+            return False
+        self.index += 1
         return True
 
+    def restriction_message(self):
+        return self.restriction
 
-def feed_item(
-    pk: str,
-    user_id: str,
-    username: str,
-    taken_at: datetime,
-    *,
-    has_liked: bool = False,
-    is_ad: bool = False,
-) -> dict:
-    media = {
-        "pk": pk,
-        "id": f"{pk}_{user_id}",
-        "taken_at": int(taken_at.timestamp()),
-        "has_liked": has_liked,
-        "user": {"pk": user_id, "username": username},
-    }
-    if is_ad:
-        media["is_ad"] = True
-    return {"media_or_ad": media}
+    def is_caught_up(self):
+        return self.caught_up_at is not None and self.index >= self.caught_up_at
 
 
-class PagedFakeClient(FakeClient):
-    def __init__(self, pages: dict[str, dict], following_ids: list[str]):
-        super().__init__([], following_ids)
-        self.pages = pages
-        self.timeline_requests: list[tuple[str, str]] = []
-
-    def get_timeline_feed(self, reason: str = "pull_to_refresh", **kwargs):
-        max_id = str(kwargs.get("max_id") or "")
-        self.timeline_requests.append((reason, max_id))
-        return self.pages[max_id]
-
-
-class FollowingAutoLikerTestCase(unittest.TestCase):
-    def setUp(self) -> None:
-        self.temporary_directory = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temporary_directory.cleanup)
-        self.storage = Storage(AppPaths.from_root(Path(self.temporary_directory.name)))
-        self.now = datetime(2026, 8, 21, 14, 0, tzinfo=timezone(timedelta(hours=9)))
-
-    def config(self, **overrides) -> AppConfig:
+class FollowingAutoLikerRegressionTestCase(unittest.TestCase):
+    def config(self, **updates):
         values = {
-            "username": "owner",
-            "daily_limit": 30,
-            "like_probability": 100,
-            "scan_interval_minutes": 15,
+            "check_interval_minutes": 30,
             "min_delay_seconds": 0,
             "max_delay_seconds": 0,
-            "lookback_hours": 24,
-            "following_refresh_hours": 24,
-            "excluded_usernames": [],
-            "max_failures_per_media": 3,
+            "max_likes_per_cycle": 0,
+            "max_scroll_rounds": 20,
+            "unchanged_scroll_rounds": 2,
         }
-        values.update(overrides)
-        return AppConfig(**values)
+        values.update(updates)
+        return AppConfig(**values).validate()
 
-    def engine(self, client: FakeClient, config: AppConfig, rng: FixedRandom | None = None) -> FollowingAutoLiker:
-        return FollowingAutoLiker(
-            "owner",
-            config,
-            self.storage,
-            client=client,
-            rng=rng or FixedRandom(),
-            now_fn=lambda: self.now,
+    def scanner(self, config=None, *, wait_fn=None):
+        return FollowingFeedScanner(
+            config or self.config(),
+            rng=random.Random(7),
+            wait_fn=wait_fn or (lambda _event, _seconds: False),
         )
 
-    def mark_following_cache_fresh(self, engine: FollowingAutoLiker, following_ids: list[str]) -> None:
-        engine.state.initialized = True
-        engine.state.following_ids = following_ids
-        engine.state.following_refreshed_at = self.now.astimezone(timezone.utc).isoformat()
-        engine.save_state()
+    def test_likes_every_unliked_organic_post_across_pages(self):
+        first = FakePost("/p/one/")
+        already = FakePost("/p/two/", state="liked")
+        sponsored = FakePost("/p/ad/", exclusion_reason="sponsored")
+        recommended = FakePost("/p/recommended/", exclusion_reason="recommended")
+        second = FakePost("/reel/three/")
+        duplicate = FakePost("https://www.instagram.com/p/one/?utm_source=test")
+        feed = FakeFeed([[first, already, sponsored, recommended], [second, duplicate]])
 
-    def test_timeline_fetch_uses_next_cursor_and_respects_page_limit(self) -> None:
-        client = PagedFakeClient(
-            {
-                "": {
-                    "feed_items": [feed_item("601", "1", "first", self.now - timedelta(minutes=2))],
-                    "more_available": True,
-                    "next_max_id": "cursor-1",
-                },
-                "cursor-1": {
-                    "feed_items": [feed_item("602", "2", "second", self.now - timedelta(minutes=1))],
-                    "more_available": True,
-                    "next_max_id": "cursor-2",
-                },
-            },
-            ["1", "2"],
-        )
-        engine = self.engine(client, self.config())
+        summary = self.scanner().scan_once(feed)
 
-        posts = engine.fetch_timeline_posts(max_pages=2)
+        self.assertEqual(summary.liked, 2)
+        self.assertEqual(summary.already_liked, 1)
+        self.assertEqual(summary.sponsored, 1)
+        self.assertEqual(summary.recommended, 1)
+        self.assertEqual(summary.discovered, 5)
+        self.assertEqual(first.clicks, 1)
+        self.assertEqual(second.clicks, 1)
+        self.assertEqual(duplicate.clicks, 0)
+        self.assertEqual(feed.open_count, 1)
 
-        self.assertEqual([post.media_id for post in posts], ["601_1", "602_2"])
-        self.assertEqual(
-            client.timeline_requests,
-            [("pull_to_refresh", ""), ("pagination", "cursor-1")],
-        )
+    def test_zero_max_likes_means_unlimited(self):
+        posts = [FakePost(f"/p/{index}/") for index in range(25)]
+        summary = self.scanner(self.config(max_likes_per_cycle=0)).scan_once(FakeFeed([posts]))
+        self.assertEqual(summary.liked, 25)
+        self.assertFalse(summary.max_likes_reached)
 
-    def test_first_run_only_records_a_baseline(self) -> None:
-        items = [
-            feed_item("101", "1", "friend", self.now - timedelta(minutes=10)),
-            feed_item("102", "2", "another", self.now - timedelta(minutes=20)),
-        ]
-        client = FakeClient(items, ["1", "2"])
-        engine = self.engine(client, self.config())
+    def test_optional_cycle_limit_stops_before_next_post(self):
+        posts = [FakePost(f"/p/{index}/") for index in range(5)]
+        summary = self.scanner(self.config(max_likes_per_cycle=2)).scan_once(FakeFeed([posts]))
+        self.assertEqual(summary.liked, 2)
+        self.assertTrue(summary.max_likes_reached)
+        self.assertEqual(sum(post.clicks for post in posts), 2)
 
-        baseline_count = engine.initialize_baseline()
+    def test_caught_up_marker_ends_scan_without_extra_scroll(self):
+        first = FakePost("/p/one/")
+        second = FakePost("/p/two/")
+        feed = FakeFeed([[first], [second]], caught_up_at=0)
 
-        self.assertEqual(baseline_count, 2)
-        self.assertTrue(engine.state.initialized)
-        self.assertEqual(set(engine.state.processed_media_ids), {"101_1", "102_2"})
-        self.assertEqual(client.liked, [])
+        summary = self.scanner().scan_once(feed)
 
-    def test_scan_likes_only_recent_organic_posts_from_following_accounts(self) -> None:
-        items = [
-            feed_item("201", "1", "friend", self.now - timedelta(minutes=30)),
-            feed_item("202", "8", "recommended", self.now - timedelta(minutes=10)),
-            feed_item("203", "1", "friend", self.now - timedelta(minutes=5), is_ad=True),
-            feed_item("204", "1", "friend", self.now - timedelta(minutes=6), has_liked=True),
-            feed_item("205", "1", "friend", self.now - timedelta(hours=30)),
-            feed_item("206", "2", "excluded", self.now - timedelta(minutes=7)),
-        ]
-        client = FakeClient(items, ["1", "2"])
-        engine = self.engine(client, self.config(excluded_usernames=["@excluded"]))
-        self.mark_following_cache_fresh(engine, ["1", "2"])
-
-        summary = engine.scan_once()
-
-        self.assertEqual(client.liked, ["201_1"])
+        self.assertTrue(summary.caught_up)
         self.assertEqual(summary.liked, 1)
-        self.assertEqual(summary.candidates, 1)
-        self.assertTrue({"202_8", "203_1", "204_1", "205_1", "206_2"}.issubset(engine.state.processed_media_ids))
+        self.assertEqual(second.clicks, 0)
+        self.assertEqual(feed.index, 0)
 
-    def test_daily_limit_leaves_remaining_candidate_for_later(self) -> None:
-        items = [
-            feed_item("301", "1", "first", self.now - timedelta(minutes=20)),
-            feed_item("302", "2", "second", self.now - timedelta(minutes=10)),
-        ]
-        client = FakeClient(items, ["1", "2"])
-        engine = self.engine(client, self.config(daily_limit=1))
-        self.mark_following_cache_fresh(engine, ["1", "2"])
+    def test_restriction_after_like_stops_immediately(self):
+        feed = FakeFeed([[]])
+        post = FakePost("/p/one/")
+        post.after_click = lambda: setattr(feed, "restriction", "Try again later")
+        feed.pages = [[post, FakePost("/p/two/")]]
 
-        summary = engine.scan_once()
+        with self.assertRaises(InstagramRestrictionError):
+            self.scanner().scan_once(feed)
+        self.assertEqual(post.clicks, 1)
+        self.assertEqual(feed.pages[0][1].clicks, 0)
 
-        self.assertEqual(client.liked, ["301_1"])
-        self.assertTrue(summary.daily_limit_reached)
-        self.assertIn("301_1", engine.state.processed_media_ids)
-        self.assertNotIn("302_2", engine.state.processed_media_ids)
-
-    def test_probability_skip_is_processed_once(self) -> None:
-        client = FakeClient(
-            [feed_item("401", "1", "friend", self.now - timedelta(minutes=5))],
-            ["1"],
+    def test_stop_during_delay_does_not_click(self):
+        post = FakePost("/p/one/")
+        stop_event = threading.Event()
+        scanner = self.scanner(
+            self.config(min_delay_seconds=10, max_delay_seconds=10),
+            wait_fn=lambda _event, _seconds: True,
         )
-        engine = self.engine(client, self.config(like_probability=90), FixedRandom(0.95))
-        self.mark_following_cache_fresh(engine, ["1"])
 
-        summary = engine.scan_once()
+        summary = scanner.scan_once(FakeFeed([[post]]), stop_event)
 
-        self.assertEqual(summary.skipped_probability, 1)
-        self.assertEqual(client.liked, [])
-        self.assertIn("401_1", engine.state.processed_media_ids)
+        self.assertTrue(summary.stopped)
+        self.assertEqual(post.clicks, 0)
 
-    def test_repeated_failures_stop_after_configured_attempts(self) -> None:
-        client = FakeClient(
-            [feed_item("501", "1", "friend", self.now - timedelta(minutes=5))],
-            ["1"],
+    def test_default_delay_is_three_to_five_seconds(self):
+        config = AppConfig().validate()
+        self.assertEqual(config.min_delay_seconds, 3)
+        self.assertEqual(config.max_delay_seconds, 5)
+
+    def test_config_validation_and_url_normalization(self):
+        self.assertEqual(
+            normalize_post_key("https://www.instagram.com/reel/ABC123/?igsh=example"),
+            "/reel/ABC123/",
         )
-        client.fail_ids.add("501_1")
-        engine = self.engine(client, self.config(max_failures_per_media=2))
-        self.mark_following_cache_fresh(engine, ["1"])
-
-        first = engine.scan_once()
-        second = engine.scan_once()
-
-        self.assertEqual(first.failed, 1)
-        self.assertEqual(second.failed, 1)
-        self.assertIn("501_1", engine.state.processed_media_ids)
-        self.assertNotIn("501_1", engine.state.failed_attempts)
+        self.assertEqual(normalize_post_key("/p/POST42/"), "/p/POST42/")
+        with self.assertRaisesRegex(ValueError, "최소 대기"):
+            self.config(min_delay_seconds=30, max_delay_seconds=10)
+        with self.assertRaisesRegex(ValueError, "0~10000"):
+            self.config(max_likes_per_cycle=-1)
 
 
 if __name__ == "__main__":

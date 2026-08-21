@@ -1,0 +1,116 @@
+name: Build Following Auto Like
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "apps/following_auto_like/**"
+      - "tests/regression/test_following_auto_like.py"
+      - ".github/workflows/build-following-auto-like.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test desktop app
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . pytest ruff
+
+      - name: Lint app and tests
+        run: |
+          ruff check apps/following_auto_like tests/regression/test_following_auto_like.py
+          ruff format --check apps/following_auto_like tests/regression/test_following_auto_like.py
+
+      - name: Run regression tests
+        run: python -m pytest -q tests/regression/test_following_auto_like.py
+
+  build:
+    name: Build ${{ matrix.os }} package
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - windows-latest
+          - macos-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install application and packager
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . "pyinstaller>=6.16,<7"
+
+      - name: Build desktop application
+        run: >-
+          python -m PyInstaller
+          --noconfirm
+          --clean
+          --onefile
+          --windowed
+          --name FollowingAutoLike
+          --paths .
+          --collect-all instagrapi
+          --collect-submodules Cryptodome
+          apps/following_auto_like/app.py
+
+      - name: Package Windows application
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "dist/FollowingAutoLike.exe")) {
+            throw "FollowingAutoLike.exe was not produced"
+          }
+          Compress-Archive `
+            -Path "dist/FollowingAutoLike.exe" `
+            -DestinationPath "dist/FollowingAutoLike-Windows.zip" `
+            -Force
+
+      - name: Package macOS application
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          test -d "dist/FollowingAutoLike.app"
+          ditto -c -k --sequesterRsrc --keepParent \
+            "dist/FollowingAutoLike.app" \
+            "dist/FollowingAutoLike-macOS.zip"
+
+      - name: Upload Windows artifact
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v7
+        with:
+          name: FollowingAutoLike-Windows-${{ runner.arch }}
+          path: dist/FollowingAutoLike-Windows.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload macOS artifact
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v7
+        with:
+          name: FollowingAutoLike-macOS-${{ runner.arch }}
+          path: dist/FollowingAutoLike-macOS.zip
+          if-no-files-found: error
+          retention-days: 14

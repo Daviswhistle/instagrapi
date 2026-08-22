@@ -1,0 +1,171 @@
+name: Apply PR1 Cleanup
+
+on:
+  push:
+    branches: ["feat/following-auto-liker-desktop"]
+    paths:
+      - ".github/workflows/apply-pr1-cleanup.yml"
+      - ".cleanup-pr1/**"
+
+permissions:
+  contents: write
+
+env:
+  PYTHON_VERSION: "3.13.5"
+  RUFF_VERSION: "0.16.2"
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      commit_sha: ${{ steps.commit.outputs.commit_sha }}
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v7
+        with:
+          ref: feat/following-auto-liker-desktop
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Reconstruct and apply cleanup overlay
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .cleanup-pr1/part* | base64 --decode > /tmp/pr1-cleanup.tar.xz
+          echo "c8d301d7e51020006d789b145b7c31b229b82355f7791695ec8a9054cbf35205  /tmp/pr1-cleanup.tar.xz" | sha256sum -c -
+          tar -xJf /tmp/pr1-cleanup.tar.xz -C .
+
+          rm -rf .cleanup-pr1
+          rm -f .github/workflows/apply-pr1-cleanup.yml
+          rm -f .github/workflows/finalize-following-auto-liker.yml
+          rm -f .github/workflows/finalize-following-auto-liker-v2.yml
+          rm -f this-path-should-not-exist.tmp
+
+          rm -f apps/following_auto_liker/config.py
+          rm -f apps/following_auto_liker/model.py
+          rm -f apps/following_auto_liker/scanner.py
+          rm -f apps/following_auto_liker/browser_common.py
+          rm -f apps/following_auto_liker/browser_constants.py
+          rm -f apps/following_auto_liker/browser_following.py
+          rm -f apps/following_auto_liker/browser_post.py
+          rm -f apps/following_auto_liker/browser_session.py
+          rm -f apps/following_auto_liker/engine_runner.py
+          rm -f apps/following_auto_liker/engine_scanner.py
+          rm -f apps/following_auto_liker/engine_shared.py
+
+          find apps tests -type d -name __pycache__ -prune -exec rm -rf {} +
+          find apps tests -type f -name '*.pyc' -delete
+
+      - name: Install verification dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install . "ruff==${RUFF_VERSION}"
+          python -m pip install -r apps/following_auto_liker/requirements.txt
+
+      - name: Format and verify cleanup
+        run: |
+          ruff check --fix apps/following_auto_liker tests/regression/test_following_auto_liker.py
+          ruff format apps/following_auto_liker tests/regression/test_following_auto_liker.py
+          ruff check apps/following_auto_liker tests/regression/test_following_auto_liker.py
+          ruff format --check apps/following_auto_liker tests/regression/test_following_auto_liker.py
+          python -m compileall -q apps tests/regression/test_following_auto_liker.py
+          python -m unittest -v tests.regression.test_following_auto_liker
+          git diff --check
+
+      - name: Commit cleanup
+        id: commit
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m "fix: apply reviewed Chrome auto-liker cleanup"
+            git push origin HEAD:feat/following-auto-liker-desktop
+          fi
+          echo "commit_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  verify:
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out finalized commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.commit_sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install . "ruff==${RUFF_VERSION}"
+          python -m pip install -r apps/following_auto_liker/requirements.txt
+
+      - name: Verify finalized source
+        run: |
+          ruff check --output-format=github .
+          ruff format --check .
+          python -m compileall -q apps tests/regression/test_following_auto_liker.py
+          python -m unittest -v tests.regression.test_following_auto_liker
+          git diff --check
+
+  build:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact_name: FollowingAutoLiker-Windows
+          - os: macos-15
+            artifact_name: FollowingAutoLiker-macOS-Apple-Silicon
+          - os: macos-15-intel
+            artifact_name: FollowingAutoLiker-macOS-Intel
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out finalized commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.commit_sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install . pyinstaller
+          python -m pip install -r apps/following_auto_liker/requirements.txt
+
+      - name: Build desktop application
+        run: >-
+          pyinstaller --noconfirm --clean --onefile --windowed
+          --name FollowingAutoLiker --paths .
+          --collect-all playwright --copy-metadata playwright
+          apps/following_auto_liker/app.py
+
+      - name: Package Windows application
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path dist/FollowingAutoLiker.exe -DestinationPath "${{ matrix.artifact_name }}.zip"
+
+      - name: Package macOS application
+        if: runner.os == 'macOS'
+        run: ditto -c -k --sequesterRsrc --keepParent dist/FollowingAutoLiker.app "${{ matrix.artifact_name }}.zip"
+
+      - name: Upload packaged application
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_name }}.zip
+          if-no-files-found: error

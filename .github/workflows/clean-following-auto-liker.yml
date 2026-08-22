@@ -1,9 +1,10 @@
 name: Apply Clean Following Auto Liker
 
 on:
-  push:
-    branches: ["feat/following-auto-liker-desktop"]
+  pull_request:
+    branches: ["master"]
     paths:
+      - ".cleanup-parts/**"
       - ".github/workflows/clean-following-auto-liker.yml"
 
 permissions:
@@ -11,6 +12,7 @@ permissions:
 
 jobs:
   apply:
+    if: github.head_ref == 'feat/following-auto-liker-desktop'
     runs-on: ubuntu-latest
     steps:
       - name: Check out feature branch

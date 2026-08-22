@@ -27,6 +27,8 @@ Google Chrome에서 Instagram의 **시간순 팔로잉 피드**를 열고, 발�
 4. 처음 열린 Chrome 창에서 Instagram에 직접 로그인합니다. 2단계 인증이나 본인 확인도 그 창에서 직접 완료합니다.
 5. 앱과 앱이 연 Chrome 창을 열어 둡니다. 이후에는 저장된 로그인 상태를 사용합니다.
 
+앱은 전용 Chrome 프로필을 보호하기 위해 한 번에 한 인스턴스만 실행됩니다. 이미 실행 중일 때 두 번째 앱을 열면 안내를 표시하고 종료하며, 실행 중인 다른 인스턴스 아래의 로그인 데이터를 삭제하지 않습니다.
+
 Windows SmartScreen이나 macOS Gatekeeper가 경고할 수 있습니다. 배포 파일에 코드 서명을 하지 않았기 때문입니다. macOS에서는 앱을 Control-클릭한 뒤 **열기**를 선택하면 됩니다.
 
 ## 기본 설정
@@ -101,6 +103,8 @@ python -m apps.following_auto_liker.app
 ```bash
 python -m unittest -v tests.regression.test_following_auto_liker
 ```
+
+회귀 테스트 18개는 기본 3~5초 간격, 전체 처리, 광고·추천·댓글 하트 구분, 제한 감지, 실제 팔로잉 피드 DOM 검증, 다국어 팝업 처리, 단일 인스턴스 잠금과 안전한 프로필 삭제를 확인합니다.
 
 로컬 패키징:
 

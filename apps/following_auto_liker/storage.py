@@ -6,7 +6,72 @@ import shutil
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
+
+
+class AppAlreadyRunningError(RuntimeError):
+    """Raised when another process already owns the app/profile lock."""
+
+
+class InstanceLock:
+    """Cross-platform advisory lock held for the lifetime of the desktop app."""
+
+    def __init__(self, path: Path, handle: BinaryIO):
+        self.path = path
+        self._handle: BinaryIO | None = handle
+
+    @classmethod
+    def acquire(cls, path: Path) -> InstanceLock:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handle = path.open("a+b")
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                handle.seek(0, os.SEEK_END)
+                if handle.tell() == 0:
+                    handle.write(b"\0")
+                    handle.flush()
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (BlockingIOError, OSError) as exc:
+            handle.close()
+            raise AppAlreadyRunningError(
+                "팔로잉 자동 좋아요가 이미 실행 중입니다. 기존 앱과 전용 Chrome 창을 닫은 뒤 다시 실행하세요."
+            ) from exc
+        return cls(path, handle)
+
+    @property
+    def locked(self) -> bool:
+        return self._handle is not None
+
+    def release(self) -> None:
+        handle = self._handle
+        if handle is None:
+            return
+        self._handle = None
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
+
+    def __enter__(self) -> InstanceLock:
+        return self
+
+    def __exit__(self, _exc_type, _exc, _traceback) -> None:
+        self.release()
 
 
 @dataclass(frozen=True, slots=True)
@@ -15,6 +80,7 @@ class StoragePaths:
     config: Path
     chrome_profile: Path
     log: Path
+    instance_lock: Path
 
 
 @dataclass(slots=True)
@@ -64,6 +130,7 @@ class AppConfig:
 class Storage:
     def __init__(self, paths: StoragePaths):
         self.paths = paths
+        self._instance_lock: InstanceLock | None = None
         self.paths.root.mkdir(parents=True, exist_ok=True)
         self.paths.chrome_profile.mkdir(parents=True, exist_ok=True)
 
@@ -85,8 +152,19 @@ class Storage:
                 config=root / "config.json",
                 chrome_profile=root / "chrome-profile",
                 log=root / "app.log",
+                instance_lock=root / "app.lock",
             )
         )
+
+    def acquire_instance_lock(self) -> InstanceLock:
+        if self._instance_lock is not None and self._instance_lock.locked:
+            return self._instance_lock
+        self._instance_lock = InstanceLock.acquire(self.paths.instance_lock)
+        return self._instance_lock
+
+    @property
+    def instance_lock_held(self) -> bool:
+        return self._instance_lock is not None and self._instance_lock.locked
 
     def load_config(self) -> AppConfig:
         try:
@@ -100,6 +178,10 @@ class Storage:
         self._atomic_write_json(self.paths.config, asdict(config))
 
     def clear_browser_profile(self) -> None:
+        if not self.instance_lock_held:
+            raise AppAlreadyRunningError(
+                "전용 Chrome 데이터를 지우려면 이 앱의 단일 실행 잠금이 필요합니다. 다른 실행 창을 모두 닫아 주세요."
+            )
         if self.paths.chrome_profile.exists():
             shutil.rmtree(self.paths.chrome_profile)
         self.paths.chrome_profile.mkdir(parents=True, exist_ok=True)

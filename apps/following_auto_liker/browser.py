@@ -11,6 +11,7 @@ from .engine import (
     BrowserClosedError,
     ChromeLaunchError,
     FollowingFeedUnavailableError,
+    InstagramRestrictionError,
     LikeState,
     LoginRequiredError,
     PlaywrightMissingError,
@@ -167,10 +168,76 @@ CAUGHT_UP_PHRASES = (
     "以上是最新動態",
 )
 DISMISS_BUTTON_LABELS = (
+    # English / Korean
     "Not Now",
     "Not now",
+    "Later",
+    "Close",
     "나중에 하기",
+    "나중에",
+    "지금은 안 함",
     "닫기",
+    # Japanese
+    "後で",
+    "今はしない",
+    "閉じる",
+    # Spanish
+    "Ahora no",
+    "Más tarde",
+    "Cerrar",
+    # French
+    "Plus tard",
+    "Pas maintenant",
+    "Fermer",
+    # German
+    "Jetzt nicht",
+    "Später",
+    "Schließen",
+    # Portuguese
+    "Agora não",
+    "Mais tarde",
+    "Fechar",
+    # Russian
+    "Не сейчас",
+    "Позже",
+    "Закрыть",
+    # Simplified / Traditional Chinese
+    "暂不",
+    "以后再说",
+    "稍后",
+    "关闭",
+    "暫不",
+    "稍後再說",
+    "稍後",
+    "關閉",
+)
+EMPTY_FOLLOWING_PHRASES = (
+    "when you follow people, you'll see the photos and videos they post here",
+    "사람들을 팔로우하면 그들이 공유한 사진과 동영상을 여기에서 볼 수 있습니다",
+    "フォローした人の写真や動画がここに表示されます",
+    "cuando sigas a personas, verás aquí las fotos y los videos que publiquen",
+    "lorsque vous suivez des personnes, vous voyez ici les photos et vidéos qu’elles publient",
+    "wenn du personen folgst, siehst du hier die von ihnen geposteten fotos und videos",
+    "quando você seguir pessoas, verá aqui as fotos e os vídeos que elas publicarem",
+    "когда вы подпишетесь на людей, здесь будут показываться их фото и видео",
+    "关注用户后，你会在这里看到他们发布的照片和视频",
+    "追蹤其他人後，你會在這裡看到他們發佈的相片和影片",
+)
+FEED_ERROR_PHRASES = (
+    "something went wrong",
+    "couldn't refresh feed",
+    "could not refresh feed",
+    "문제가 발생했습니다",
+    "피드를 새로 고칠 수 없습니다",
+    "エラーが発生しました",
+    "se produjo un error",
+    "une erreur s’est produite",
+    "une erreur s'est produite",
+    "etwas ist schiefgelaufen",
+    "ocorreu um erro",
+    "произошла ошибка",
+    "出错了",
+    "發生錯誤",
 )
 RESERVED_PATHS = {
     "about",
@@ -394,14 +461,87 @@ class PlaywrightFollowingFeed:
                 "Instagram이 시간순 팔로잉 피드를 열지 않았습니다. 웹 화면이 변경되었을 수 있어 "
                 "일반 홈 피드를 잘못 처리하지 않도록 중지했습니다."
             )
-        self._dismiss_common_dialogs()
+        self._wait_until_following_surface()
         try:
             page.evaluate("window.scrollTo(0, 0)")
             page.wait_for_timeout(1_500)
         except Exception as exc:
             self.session.raise_browser_error(exc)
 
+    def _wait_until_following_surface(self, timeout_seconds: float = 12.0) -> None:
+        """Require real feed content or a recognized legitimate empty state."""
+        deadline = time.monotonic() + max(0.0, timeout_seconds)
+        while True:
+            if self._looks_logged_out():
+                raise LoginRequiredError(
+                    "Instagram 로그인이 풀렸습니다. 열린 Chrome에서 다시 로그인한 뒤 앱을 다시 시작하세요."
+                )
+            if not self._is_following_url(self.page.url):
+                raise FollowingFeedUnavailableError(
+                    "Instagram이 팔로잉 피드가 아닌 다른 화면으로 이동했습니다. "
+                    "체크포인트나 오류 화면일 수 있어 자동화를 중지했습니다."
+                )
+
+            restriction = self.restriction_message()
+            if restriction:
+                raise InstagramRestrictionError(
+                    f"Instagram이 활동을 제한했습니다. 자동화를 중지했습니다. 표시 내용: {restriction}"
+                )
+
+            self._dismiss_common_dialogs()
+            if self._has_post_surface() or self.is_caught_up() or self._has_legitimate_empty_state():
+                return
+
+            error_message = self._feed_error_message()
+            if error_message:
+                raise FollowingFeedUnavailableError(
+                    f"Instagram 팔로잉 피드를 불러오지 못했습니다. 표시 내용: {truncate_text(error_message)}"
+                )
+            if time.monotonic() >= deadline:
+                break
+            try:
+                self.page.wait_for_timeout(500)
+            except Exception as exc:
+                self.session.raise_browser_error(exc)
+
+        raise FollowingFeedUnavailableError(
+            "Instagram 팔로잉 피드의 게시물 영역을 확인하지 못했습니다. "
+            "오류·본인 확인 화면인지 확인한 뒤 다시 실행하세요."
+        )
+
+    def _has_post_surface(self) -> bool:
+        try:
+            selector = 'article:has(a[href*="/p/"]), article:has(a[href*="/reel/"]), article:has(a[href*="/tv/"])'
+            return self.page.locator(selector).count() > 0
+        except Exception as exc:
+            self.session.raise_browser_error(exc)
+
+    def _has_legitimate_empty_state(self) -> bool:
+        return self._matching_non_post_surface_text(EMPTY_FOLLOWING_PHRASES) is not None
+
+    def _feed_error_message(self) -> str | None:
+        if self._has_post_surface():
+            return None
+        return self._matching_non_post_surface_text(FEED_ERROR_PHRASES)
+
+    def _matching_non_post_surface_text(self, phrases: tuple[str, ...]) -> str | None:
+        selectors = f"{_STATUS_SURFACE_SELECTOR}, main:visible"
+        try:
+            surfaces = self.page.locator(selectors)
+            for index in range(min(surfaces.count(), 16)):
+                surface = surfaces.nth(index)
+                if surface.locator("xpath=ancestor::article").count():
+                    continue
+                text = surface.inner_text(timeout=1_500)
+                normalized = normalize_ui_text(text)
+                if any(normalize_ui_text(phrase) in normalized for phrase in phrases):
+                    return text
+        except Exception as exc:
+            self.session.raise_browser_error(exc)
+        return None
+
     def posts(self) -> Iterable[PlaywrightFeedPost]:
+        self._dismiss_common_dialogs()
         try:
             articles = self.page.locator("article")
             count = articles.count()
@@ -416,6 +556,7 @@ class PlaywrightFollowingFeed:
         return posts
 
     def scroll_for_more(self) -> bool:
+        self._dismiss_common_dialogs()
         page = self.page
         try:
             before = page.evaluate(
@@ -484,7 +625,12 @@ class PlaywrightFollowingFeed:
     @staticmethod
     def _is_following_url(url: str) -> bool:
         parsed = urlparse(str(url or ""))
-        return is_instagram_hostname(parsed.hostname) and parse_qs(parsed.query).get("variant") == ["following"]
+        return (
+            parsed.scheme in {"http", "https"}
+            and is_instagram_hostname(parsed.hostname)
+            and parsed.path in {"", "/"}
+            and parse_qs(parsed.query).get("variant") == ["following"]
+        )
 
     def _looks_logged_out(self) -> bool:
         page = self.page
@@ -496,14 +642,72 @@ class PlaywrightFollowingFeed:
             self.session.raise_browser_error(exc)
 
     def _dismiss_common_dialogs(self) -> None:
-        for label in DISMISS_BUTTON_LABELS:
+        """Dismiss only safe secondary actions, including supported localized labels."""
+        safe_labels = {normalize_ui_text(label) for label in DISMISS_BUTTON_LABELS}
+        for _round in range(4):
+            dismissed = False
             try:
-                button = self.page.get_by_role("button", name=label, exact=True)
-                if button.count() and button.first.is_visible():
-                    button.first.click(timeout=2_000)
+                dialogs = self.page.locator('[role="dialog"]:visible')
+                for dialog_index in range(min(dialogs.count(), 8)):
+                    dialog = dialogs.nth(dialog_index)
+                    if self._surface_contains_restriction(dialog):
+                        continue
+                    if self._click_safe_dismiss_control(dialog, safe_labels):
+                        dismissed = True
+                        break
+
+                if not dismissed:
+                    # Some Instagram overlays omit role=dialog. Restrict the
+                    # fallback to visible controls outside posts and never click
+                    # a control belonging to a restriction dialog.
+                    controls = self.page.locator('button:visible, [role="button"]:visible')
+                    for index in range(min(controls.count(), 80)):
+                        control = controls.nth(index)
+                        if control.locator("xpath=ancestor::article").count():
+                            continue
+                        dialog = control.locator("xpath=ancestor::*[@role='dialog'][1]")
+                        if dialog.count() and self._surface_contains_restriction(dialog.first):
+                            continue
+                        if self._control_matches_safe_label(control, safe_labels):
+                            control.click(timeout=2_000)
+                            dismissed = True
+                            break
+
+                if dismissed:
                     self.page.wait_for_timeout(300)
-            except Exception:
-                continue
+                else:
+                    break
+            except Exception as exc:
+                detail = str(exc).lower()
+                if any(phrase in detail for phrase in ("target page", "target closed", "browser has been closed")):
+                    self.session.raise_browser_error(exc)
+                break
+
+    def _click_safe_dismiss_control(self, surface: Locator, safe_labels: set[str]) -> bool:
+        controls = surface.locator('button:visible, [role="button"]:visible')
+        for index in range(min(controls.count(), 20)):
+            control = controls.nth(index)
+            if self._control_matches_safe_label(control, safe_labels):
+                control.click(timeout=2_000)
+                return True
+        return False
+
+    @staticmethod
+    def _control_matches_safe_label(control: Locator, safe_labels: set[str]) -> bool:
+        values = [
+            control.get_attribute("aria-label") or "",
+            control.get_attribute("title") or "",
+            control.inner_text(timeout=800),
+        ]
+        return any(normalize_ui_text(value) in safe_labels for value in values if value)
+
+    @staticmethod
+    def _surface_contains_restriction(surface: Locator) -> bool:
+        try:
+            normalized = normalize_ui_text(surface.inner_text(timeout=1_000))
+        except Exception:
+            return False
+        return any(normalize_ui_text(phrase) in normalized for phrase in RESTRICTION_PHRASES)
 
 
 class PlaywrightFeedPost:

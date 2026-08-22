@@ -1,6 +1,12 @@
 """Chrome-based desktop auto-liker for Instagram's Following feed."""
 
 from .engine import FollowingAutoLiker, FollowingFeedScanner
-from .storage import AppConfig, Storage
+from .storage import AppAlreadyRunningError, AppConfig, Storage
 
-__all__ = ["AppConfig", "FollowingAutoLiker", "FollowingFeedScanner", "Storage"]
+__all__ = [
+    "AppAlreadyRunningError",
+    "AppConfig",
+    "FollowingAutoLiker",
+    "FollowingFeedScanner",
+    "Storage",
+]

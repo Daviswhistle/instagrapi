@@ -5,6 +5,8 @@ import shutil
 import threading
 import unittest
 from dataclasses import dataclass
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from apps.following_auto_liker.browser import (
     PlaywrightFeedPost,
@@ -14,10 +16,16 @@ from apps.following_auto_liker.browser import (
 from apps.following_auto_liker.engine import (
     FollowingAutoLiker,
     FollowingFeedScanner,
+    FollowingFeedUnavailableError,
     InstagramRestrictionError,
     normalize_post_key,
 )
-from apps.following_auto_liker.storage import AppConfig
+from apps.following_auto_liker.storage import (
+    AppAlreadyRunningError,
+    AppConfig,
+    Storage,
+    StoragePaths,
+)
 
 
 @dataclass
@@ -205,6 +213,38 @@ class FollowingAutoLikerRegressionTestCase(unittest.TestCase):
         message = FollowingAutoLiker._summary_message(summary)
         self.assertIn("상태 미확인 1개", message)
 
+    def test_instance_lock_blocks_second_instance_and_guards_profile_deletion(self):
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            paths = StoragePaths(
+                root=root,
+                config=root / "config.json",
+                chrome_profile=root / "chrome-profile",
+                log=root / "app.log",
+                instance_lock=root / "app.lock",
+            )
+            first = Storage(paths)
+            second = Storage(paths)
+
+            with self.assertRaises(AppAlreadyRunningError):
+                second.clear_browser_profile()
+
+            lock = first.acquire_instance_lock()
+            try:
+                with self.assertRaises(AppAlreadyRunningError):
+                    second.acquire_instance_lock()
+
+                cookie = first.paths.chrome_profile / "Cookies"
+                cookie.write_text("session", encoding="utf-8")
+                first.clear_browser_profile()
+                self.assertTrue(first.paths.chrome_profile.is_dir())
+                self.assertFalse(cookie.exists())
+            finally:
+                lock.release()
+
+            replacement_lock = second.acquire_instance_lock()
+            replacement_lock.release()
+
     def test_config_validation_url_normalization_and_hostname_check(self):
         self.assertEqual(
             normalize_post_key("https://www.instagram.com/reel/ABC123/?igsh=example"),
@@ -215,10 +255,26 @@ class FollowingAutoLikerRegressionTestCase(unittest.TestCase):
         self.assertTrue(is_instagram_hostname("instagram.com"))
         self.assertFalse(is_instagram_hostname("evilinstagram.com"))
         self.assertFalse(is_instagram_hostname("instagram.com.evil.example"))
+        self.assertTrue(PlaywrightFollowingFeed._is_following_url("https://www.instagram.com/?variant=following"))
+        self.assertFalse(
+            PlaywrightFollowingFeed._is_following_url("https://www.instagram.com/checkpoint/?variant=following")
+        )
+        self.assertFalse(
+            PlaywrightFollowingFeed._is_following_url("https://www.instagram.com/accounts/login/?variant=following")
+        )
         with self.assertRaisesRegex(ValueError, "최소 대기"):
             self.config(min_delay_seconds=30, max_delay_seconds=10)
         with self.assertRaisesRegex(ValueError, "0~10000"):
             self.config(max_likes_per_cycle=-1)
+
+
+class _PageWithUrl:
+    def __init__(self, page, url: str):
+        self._page = page
+        self.url = url
+
+    def __getattr__(self, name):
+        return getattr(self._page, name)
 
 
 class _DomSession:
@@ -307,6 +363,56 @@ class BrowserDomRegressionTestCase(unittest.TestCase):
         self.assertEqual(post.like_state, "unliked")
         self.assertTrue(post.click_like())
         self.assertEqual(post.like_state, "liked")
+
+    def test_feed_surface_requires_posts_caught_up_or_explicit_empty_state(self):
+        session = _DomSession(_PageWithUrl(self.page, "https://www.instagram.com/?variant=following"))
+        feed = PlaywrightFollowingFeed(session)
+
+        self.page.set_content("<main><p>Something went wrong</p></main>")
+        self.assertFalse(feed._has_post_surface())
+        self.assertIn("Something went wrong", feed._feed_error_message())
+        with self.assertRaises(FollowingFeedUnavailableError):
+            feed._wait_until_following_surface(timeout_seconds=0)
+
+        self.page.set_content('<main><article><a href="/p/ABC123/">post</a></article></main>')
+        self.assertTrue(feed._has_post_surface())
+        self.assertIsNone(feed._feed_error_message())
+        feed._wait_until_following_surface(timeout_seconds=0)
+
+        self.page.set_content(
+            "<main><p>When you follow people, you'll see the photos and videos they post here.</p></main>"
+        )
+        self.assertTrue(feed._has_legitimate_empty_state())
+        feed._wait_until_following_surface(timeout_seconds=0)
+
+    def test_common_dialogs_are_dismissed_in_every_supported_locale(self):
+        feed = PlaywrightFollowingFeed(self.session)
+        for label in (
+            "Not Now",
+            "나중에 하기",
+            "後で",
+            "Ahora no",
+            "Plus tard",
+            "Jetzt nicht",
+            "Agora não",
+            "Не сейчас",
+            "暂不",
+            "暫不",
+        ):
+            with self.subTest(label=label):
+                self.page.set_content(
+                    f'<div role="dialog" id="modal"><button '
+                    f"onclick=\"document.querySelector('#modal').remove()\">{label}</button></div>"
+                )
+                feed._dismiss_common_dialogs()
+                self.assertEqual(self.page.locator("#modal").count(), 0)
+
+    def test_restriction_dialog_is_never_dismissed_as_a_common_popup(self):
+        self.page.set_content('<div role="dialog" id="restriction"><p>Action blocked</p><button>Close</button></div>')
+        feed = PlaywrightFollowingFeed(self.session)
+        feed._dismiss_common_dialogs()
+        self.assertEqual(self.page.locator("#restriction").count(), 1)
+        self.assertIsNotNone(feed.restriction_message())
 
     def test_caption_status_phrases_are_ignored_but_status_ui_is_detected(self):
         self.page.set_content(

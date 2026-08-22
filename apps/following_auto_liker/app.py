@@ -12,7 +12,7 @@ from logging.handlers import RotatingFileHandler
 from tkinter import END, LEFT, RIGHT, StringVar, Text, Tk, messagebox, ttk
 
 from apps.following_auto_liker.engine import AutoLikerError, FollowingAutoLiker
-from apps.following_auto_liker.storage import AppConfig, Storage
+from apps.following_auto_liker.storage import AppAlreadyRunningError, AppConfig, Storage
 from apps.following_auto_liker.view import APP_TITLE, INTRO_TEXT, LOGIN_TEXT, RISK_TEXT
 
 
@@ -34,13 +34,13 @@ def configure_logging(storage: Storage) -> logging.Logger:
 
 
 class AutoLikerApp(Tk):
-    def __init__(self) -> None:
+    def __init__(self, storage: Storage | None = None) -> None:
         super().__init__()
         self.title(APP_TITLE)
         self.geometry("780x760")
         self.minsize(720, 680)
 
-        self.storage = Storage.default()
+        self.storage = storage or Storage.default()
         self.logger = configure_logging(self.storage)
         self.saved_config = self.storage.load_config()
         self.events: queue.Queue[tuple[str, object]] = queue.Queue()
@@ -343,7 +343,7 @@ class AutoLikerApp(Tk):
             return
         try:
             self.storage.clear_browser_profile()
-        except OSError as exc:
+        except (AppAlreadyRunningError, OSError) as exc:
             messagebox.showerror(
                 APP_TITLE,
                 f"Chrome 데이터를 지우지 못했습니다. 앱이 열었던 Chrome 창을 닫고 다시 시도하세요.\n{exc}",
@@ -387,8 +387,22 @@ class AutoLikerApp(Tk):
 
 def main() -> None:
     multiprocessing.freeze_support()
-    app = AutoLikerApp()
-    app.mainloop()
+    storage = Storage.default()
+    try:
+        instance_lock = storage.acquire_instance_lock()
+    except AppAlreadyRunningError as exc:
+        startup = Tk()
+        startup.withdraw()
+        try:
+            messagebox.showerror(APP_TITLE, str(exc), parent=startup)
+        finally:
+            startup.destroy()
+        return
+
+    try:
+        AutoLikerApp(storage=storage).mainloop()
+    finally:
+        instance_lock.release()
 
 
 if __name__ == "__main__":

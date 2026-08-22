@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import re
 import threading
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable
 from urllib.parse import parse_qs, urlparse
 
-from .model import (
+from .engine import (
     BrowserClosedError,
     ChromeLaunchError,
     FollowingFeedUnavailableError,
@@ -17,41 +18,159 @@ from .model import (
 )
 
 if TYPE_CHECKING:
-    from playwright.sync_api import Locator, Page
+    from playwright.sync_api import ElementHandle, Locator, Page
 
 INSTAGRAM_HOME_URL = "https://www.instagram.com/"
-FOLLOWING_URL = "https://www.instagram.com/?variant=following"
-LIKE_LABELS = ("Like", "좋아요")
-UNLIKE_LABELS = ("Unlike", "좋아요 취소")
-SPONSORED_LABELS = ("Sponsored", "광고")
-RECOMMENDED_LABELS = (
+FOLLOWING_FEED_URL = "https://www.instagram.com/?variant=following"
+
+LIKE_LABELS = (
+    "Like",
+    "좋아요",
+    "いいね！",
+    "Me gusta",
+    "J’aime",
+    "Gefällt mir",
+    "Curtir",
+    "Нравится",
+    "赞",
+    "讚",
+)
+UNLIKE_LABELS = (
+    "Unlike",
+    "좋아요 취소",
+    "「いいね！」を取り消す",
+    "Ya no me gusta",
+    "Je n’aime plus",
+    "Gefällt mir nicht mehr",
+    "Descurtir",
+    "Не нравится",
+    "取消赞",
+    "收回讚",
+)
+COMMENT_LABELS = (
+    "Comment",
+    "댓글 달기",
+    "コメント",
+    "Comentar",
+    "Commenter",
+    "Kommentieren",
+    "Комментировать",
+    "评论",
+    "留言",
+)
+SHARE_LABELS = (
+    "Share Post",
+    "Share",
+    "공유",
+    "シェア",
+    "Compartir",
+    "Partager",
+    "Teilen",
+    "Compartilhar",
+    "Поделиться",
+    "分享",
+)
+SPONSORED_LABELS = (
+    "Sponsored",
+    "광고",
+    "広告",
+    "Publicidad",
+    "Sponsorisé",
+    "Gesponsert",
+    "Patrocinado",
+    "Реклама",
+    "赞助内容",
+    "贊助",
+)
+RECOMMENDATION_LABELS = (
     "Suggested for you",
     "Suggested post",
     "Because you follow",
-    "Recommended for you",
     "회원님을 위한 추천",
     "추천 게시물",
-)
-CAUGHT_UP_LABELS = (
-    "You're all caught up",
-    "You’re all caught up",
-    "모두 확인했습니다",
-    "최신 게시물을 모두 확인했습니다",
-    "새 게시물을 모두 확인했습니다",
+    "おすすめの投稿",
+    "Sugerencias para ti",
+    "Publicación sugerida",
+    "Suggestions pour vous",
+    "Publication suggérée",
+    "Vorschläge für dich",
+    "Vorgeschlagener Beitrag",
+    "Sugestões para você",
+    "Publicação sugerida",
+    "Рекомендации для вас",
+    "Рекомендуемая публикация",
+    "为你推荐",
+    "為你推薦",
 )
 RESTRICTION_PHRASES = (
+    # English
     "try again later",
     "we restrict certain activity",
     "action blocked",
     "temporarily blocked",
-    "please wait a few minutes",
-    "feedback_required",
+    "please wait a few minutes before you try again",
+    # Korean
+    "나중에 다시 시도하세요",
     "잠시 후 다시 시도",
-    "일부 활동을 제한",
+    "특정 활동을 제한",
     "활동을 제한",
     "작업이 차단",
     "일시적으로 차단",
-    "몇 분 후 다시 시도",
+    "몇 분 후에 다시 시도",
+    # Japanese
+    "しばらくしてからもう一度実行してください",
+    "後ほどもう一度お試しください",
+    "特定のアクティビティを制限",
+    "アクションがブロックされました",
+    # Spanish
+    "vuelve a intentarlo más tarde",
+    "restringimos cierta actividad",
+    "acción bloqueada",
+    "espera unos minutos",
+    # French
+    "réessayez plus tard",
+    "nous limitons certaines activités",
+    "action bloquée",
+    "veuillez patienter quelques minutes",
+    # German
+    "versuche es später noch einmal",
+    "wir schränken bestimmte aktivitäten ein",
+    "aktion blockiert",
+    "warte bitte einige minuten",
+    # Portuguese
+    "tente novamente mais tarde",
+    "restringimos determinadas atividades",
+    "ação bloqueada",
+    "aguarde alguns minutos",
+    # Russian
+    "повторите попытку позже",
+    "мы ограничиваем определенные действия",
+    "действие заблокировано",
+    "подождите несколько минут",
+    # Simplified / Traditional Chinese
+    "请稍后再试",
+    "我们会限制某些操作",
+    "操作已被阻止",
+    "请等待几分钟",
+    "請稍後再試",
+    "我們會限制某些操作",
+    "操作已被封鎖",
+    "請等待幾分鐘",
+)
+CAUGHT_UP_PHRASES = (
+    "you're all caught up",
+    "you’re all caught up",
+    "모두 확인했습니다",
+    "새 게시물을 모두 확인했습니다",
+    "최신 게시물을 모두 확인했습니다",
+    "以上是最新动态",
+    "以上是最新動態",
+)
+DISMISS_BUTTON_LABELS = (
+    "Not Now",
+    "Not now",
+    "나중에 하기",
+    "닫기",
 )
 RESERVED_PATHS = {
     "about",
@@ -77,17 +196,14 @@ RESERVED_PATHS = {
     "web",
 }
 
-
-def _is_instagram_host(host: str) -> bool:
-    host = host.lower().split(":", 1)[0]
-    return host == "instagram.com" or host.endswith(".instagram.com")
-
-
-def _normalized_text(value: str) -> str:
-    return re.sub(r"\s+", " ", str(value or "")).strip()
+_UNSET = object()
+_STATUS_SURFACE_SELECTOR = (
+    '[role="dialog"]:visible, [role="alert"]:visible, [role="status"]:visible, '
+    '[aria-live="assertive"]:visible, [aria-live="polite"]:visible'
+)
 
 
-class ChromeSession:
+class ChromeBrowserSession:
     def __init__(self, profile_dir: Path, *, on_log=None):
         self.profile_dir = Path(profile_dir)
         self.on_log = on_log or (lambda _message: None)
@@ -100,7 +216,7 @@ class ChromeSession:
             from playwright.sync_api import sync_playwright
         except ImportError as exc:
             raise PlaywrightMissingError(
-                "브라우저 자동화 구성요소가 없습니다. 배포된 실행 파일을 다시 내려받아 주세요."
+                "브라우저 자동화 구성요소가 빠져 있습니다. 배포된 실행 파일을 다시 내려받아 주세요."
             ) from exc
 
         self.profile_dir.mkdir(parents=True, exist_ok=True)
@@ -114,45 +230,39 @@ class ChromeSession:
                 accept_downloads=False,
                 args=["--start-maximized"],
             )
-            pages = [page for page in self.context.pages if not page.is_closed()]
-            self.page = pages[0] if pages else self.context.new_page()
-            self.page.set_default_timeout(5_000)
-            self.page.set_default_navigation_timeout(60_000)
         except Exception as exc:
-            self.close()
-            detail = str(exc).lower()
-            if any(
-                term in detail for term in ("executable doesn't exist", "channel 'chrome'", "could not find chrome")
-            ):
-                raise ChromeLaunchError("Google Chrome을 찾지 못했습니다. Chrome을 설치한 뒤 다시 시작하세요.") from exc
-            if any(
-                term in detail
-                for term in ("processsingleton", "profile is in use", "user data directory is already in use")
-            ):
-                raise ChromeLaunchError(
-                    "자동 좋아요 전용 Chrome 프로필이 이미 사용 중입니다. 열린 전용 Chrome 창을 모두 닫고 다시 시작하세요."
-                ) from exc
-            raise ChromeLaunchError(f"Chrome을 열지 못했습니다: {_normalized_text(str(exc))[:240]}") from exc
+            self._stop_playwright_only()
+            self._raise_launch_error(exc)
+
+        pages = [page for page in self.context.pages if not page.is_closed()]
+        self.page = pages[0] if pages else self.context.new_page()
+        self.page.set_default_timeout(5_000)
+        # A shorter navigation ceiling makes app shutdown responsive while still
+        # allowing normal Instagram loads on a typical connection.
+        self.page.set_default_navigation_timeout(20_000)
         self.on_log("자동 좋아요 전용 Chrome 창을 열었습니다.")
 
     def wait_until_logged_in(self, stop_event: threading.Event) -> None:
-        page = self._require_page(create=True)
-        self._goto(page, INSTAGRAM_HOME_URL)
-        if self._has_session_cookie() and not self._looks_logged_out(page):
-            self.on_log("저장된 Instagram 로그인 상태를 사용합니다.")
+        page = self._require_page()
+        self._safe_goto(page, INSTAGRAM_HOME_URL)
+
+        if self._has_session_cookie() and not self._page_looks_logged_out(page):
+            self.on_log("전용 Chrome에 저장된 Instagram 로그인을 사용합니다.")
             return
-        self.on_log("열린 Chrome 창에서 Instagram에 직접 로그인하세요. 앱은 비밀번호를 받지 않습니다.")
+
+        self.on_log(
+            "처음 한 번만 열린 Chrome 창에서 Instagram에 로그인하세요. 앱에는 아이디나 비밀번호를 입력하지 않습니다."
+        )
         while not stop_event.is_set():
-            page = self._require_page(create=True)
-            if self._has_session_cookie() and not self._looks_logged_out(page):
-                self.on_log("Instagram 로그인을 확인했습니다.")
+            page = self._require_page(create_if_missing=True)
+            if self._has_session_cookie() and not self._page_looks_logged_out(page):
+                self.on_log("Instagram 로그인을 확인했습니다. 다음 실행에도 이 로그인 상태를 사용합니다.")
                 return
             stop_event.wait(2)
-        raise LoginRequiredError("로그인 전에 중지되었습니다.")
 
     def following_feed(self) -> PlaywrightFollowingFeed:
-        if self.context is None:
-            raise BrowserClosedError("Chrome이 실행되어 있지 않습니다.")
+        if not self.context:
+            raise BrowserClosedError("Chrome이 실행되지 않았습니다.")
         return PlaywrightFollowingFeed(self)
 
     def close(self) -> None:
@@ -161,31 +271,19 @@ class ChromeSession:
                 self.context.close()
             except Exception:
                 pass
-        self.context = None
-        self.page = None
+            finally:
+                self.context = None
+                self.page = None
+        self._stop_playwright_only()
+
+    def _stop_playwright_only(self) -> None:
         if self._playwright is not None:
             try:
                 self._playwright.stop()
             except Exception:
                 pass
-        self._playwright = None
-
-    def _require_page(self, *, create: bool = False) -> Page:
-        if self.context is None:
-            raise BrowserClosedError("Chrome이 닫혔습니다.")
-        if self.page is not None and not self.page.is_closed():
-            return self.page
-        pages = [page for page in self.context.pages if not page.is_closed()]
-        if pages:
-            self.page = pages[0]
-            return self.page
-        if create:
-            try:
-                self.page = self.context.new_page()
-                return self.page
-            except Exception as exc:
-                self._raise_browser_error(exc)
-        raise BrowserClosedError("Chrome 창이 닫혔습니다.")
+            finally:
+                self._playwright = None
 
     def _has_session_cookie(self) -> bool:
         if self.context is None:
@@ -193,134 +291,228 @@ class ChromeSession:
         try:
             cookies = self.context.cookies([INSTAGRAM_HOME_URL])
         except Exception as exc:
-            self._raise_browser_error(exc)
+            self.raise_browser_error(exc)
         return any(cookie.get("name") == "sessionid" and cookie.get("value") for cookie in cookies)
 
-    def _looks_logged_out(self, page: Page) -> bool:
+    def _page_looks_logged_out(self, page: Page) -> bool:
         try:
             if "/accounts/login" in page.url:
                 return True
             return page.locator('input[name="username"]').count() > 0
         except Exception as exc:
-            self._raise_browser_error(exc)
+            self.raise_browser_error(exc)
 
-    def _goto(self, page: Page, url: str) -> None:
+    def _require_page(self, *, create_if_missing: bool = False) -> Page:
+        if self.context is None:
+            raise BrowserClosedError("Chrome 창이 닫혔습니다. 다시 시작해 주세요.")
+        if self.page is not None and not self.page.is_closed():
+            return self.page
+
+        try:
+            pages = [page for page in self.context.pages if not page.is_closed()]
+        except Exception as exc:
+            self.raise_browser_error(exc)
+        if pages:
+            self.page = pages[0]
+            return self.page
+        if create_if_missing:
+            try:
+                self.page = self.context.new_page()
+            except Exception as exc:
+                self.raise_browser_error(exc)
+            return self.page
+        raise BrowserClosedError("Chrome 창이 닫혔습니다. 다시 시작해 주세요.")
+
+    def _safe_goto(self, page: Page, url: str) -> None:
         try:
             page.goto(url, wait_until="domcontentloaded")
         except Exception as exc:
-            self._raise_browser_error(exc)
+            self.raise_browser_error(exc)
 
     @staticmethod
-    def _raise_browser_error(exc: Exception) -> None:
+    def _raise_launch_error(exc: Exception) -> None:
         detail = str(exc).lower()
         if any(
-            term in detail for term in ("target page", "browser has been closed", "target closed", "context closed")
+            phrase in detail
+            for phrase in (
+                "executable doesn't exist",
+                "chrome distribution",
+                "channel 'chrome'",
+                "could not find chrome",
+            )
         ):
-            raise BrowserClosedError("Chrome 창이 닫혔습니다. 다시 시작하세요.") from exc
+            raise ChromeLaunchError("Google Chrome을 찾지 못했습니다. Chrome을 설치한 뒤 다시 시작하세요.") from exc
+        if any(
+            phrase in detail
+            for phrase in (
+                "processsingleton",
+                "user data directory is already in use",
+                "profile is in use",
+            )
+        ):
+            raise ChromeLaunchError(
+                "자동 좋아요 전용 Chrome 프로필이 이미 사용 중입니다. "
+                "이 앱이 열었던 Chrome 창을 모두 닫은 뒤 다시 시작하세요."
+            ) from exc
+        raise ChromeLaunchError(f"Chrome을 열지 못했습니다: {safe_error_text(exc)}") from exc
+
+    @staticmethod
+    def raise_browser_error(exc: Exception) -> None:
+        detail = str(exc).lower()
+        if any(phrase in detail for phrase in ("target page", "browser has been closed", "target closed")):
+            raise BrowserClosedError("Chrome 창이 닫혔습니다. 다시 시작해 주세요.") from exc
         raise exc
 
 
 class PlaywrightFollowingFeed:
-    def __init__(self, session: ChromeSession):
+    def __init__(self, session: ChromeBrowserSession):
         self.session = session
 
     @property
     def page(self) -> Page:
-        return self.session._require_page(create=True)
+        return self.session._require_page()
 
     def open_following(self) -> None:
-        page = self.page
-        self.session._goto(page, FOLLOWING_URL)
-        try:
-            page.wait_for_timeout(1_500)
-            try:
-                page.wait_for_load_state("networkidle", timeout=8_000)
-            except Exception:
-                pass
-        except Exception as exc:
-            self.session._raise_browser_error(exc)
-        if self.session._looks_logged_out(page):
-            raise LoginRequiredError("Instagram 로그인이 풀렸습니다. 전용 Chrome에서 다시 로그인하세요.")
-        parsed = urlparse(page.url)
-        if not _is_instagram_host(parsed.hostname or ""):
-            raise FollowingFeedUnavailableError("Instagram이 아닌 페이지로 이동되어 자동화를 중지했습니다.")
-        variant = parse_qs(parsed.query).get("variant")
-        if variant != ["following"]:
-            raise FollowingFeedUnavailableError(
-                "Instagram이 시간순 팔로잉 피드를 열지 않았습니다. 웹 화면이 변경되었을 수 있어 자동화를 중지했습니다."
+        if not self.session._has_session_cookie():
+            raise LoginRequiredError(
+                "Instagram 로그인이 풀렸습니다. 전용 Chrome 데이터 지우기 후 다시 로그인하거나 다시 시작하세요."
             )
+
+        page = self.page
+        self.session._safe_goto(page, FOLLOWING_FEED_URL)
+        try:
+            page.wait_for_timeout(2_000)
+        except Exception as exc:
+            self.session.raise_browser_error(exc)
+
+        if self._looks_logged_out():
+            raise LoginRequiredError(
+                "Instagram 로그인이 풀렸습니다. 열린 Chrome에서 다시 로그인한 뒤 앱을 다시 시작하세요."
+            )
+        if not self._is_following_url(page.url):
+            raise FollowingFeedUnavailableError(
+                "Instagram이 시간순 팔로잉 피드를 열지 않았습니다. 웹 화면이 변경되었을 수 있어 "
+                "일반 홈 피드를 잘못 처리하지 않도록 중지했습니다."
+            )
+        self._dismiss_common_dialogs()
         try:
             page.evaluate("window.scrollTo(0, 0)")
-            page.wait_for_timeout(800)
+            page.wait_for_timeout(1_500)
         except Exception as exc:
-            self.session._raise_browser_error(exc)
+            self.session.raise_browser_error(exc)
 
     def posts(self) -> Iterable[PlaywrightFeedPost]:
         try:
             articles = self.page.locator("article")
-            return [PlaywrightFeedPost(self.session, articles.nth(index)) for index in range(articles.count())]
+            count = articles.count()
         except Exception as exc:
-            self.session._raise_browser_error(exc)
+            self.session.raise_browser_error(exc)
+
+        posts = []
+        for index in range(count):
+            post = PlaywrightFeedPost(self.session, articles.nth(index))
+            if post.key:
+                posts.append(post)
+        return posts
 
     def scroll_for_more(self) -> bool:
+        page = self.page
         try:
-            before = self.page.evaluate(
-                "() => ({y: window.scrollY, h: document.documentElement.scrollHeight, n: document.querySelectorAll('article').length})"
+            before = page.evaluate(
+                """() => ({
+                    y: window.scrollY,
+                    height: document.documentElement.scrollHeight,
+                    articles: document.querySelectorAll('article').length
+                })"""
             )
-            self.page.evaluate("window.scrollTo(0, document.documentElement.scrollHeight)")
-            self.page.wait_for_timeout(1_800)
-            after = self.page.evaluate(
-                "() => ({y: window.scrollY, h: document.documentElement.scrollHeight, n: document.querySelectorAll('article').length})"
+            page.evaluate("window.scrollBy(0, Math.max(window.innerHeight * 0.9, 900))")
+            page.wait_for_timeout(1_800)
+            after = page.evaluate(
+                """() => ({
+                    y: window.scrollY,
+                    height: document.documentElement.scrollHeight,
+                    articles: document.querySelectorAll('article').length
+                })"""
             )
         except Exception as exc:
-            self.session._raise_browser_error(exc)
-        return after["y"] > before["y"] + 20 or after["h"] > before["h"] or after["n"] > before["n"]
+            self.session.raise_browser_error(exc)
+
+        return bool(
+            after["y"] > before["y"] + 20
+            or after["height"] > before["height"]
+            or after["articles"] > before["articles"]
+        )
 
     def restriction_message(self) -> str | None:
-        page = self.page
-        selectors = (
-            '[role="dialog"]:visible',
-            '[role="alert"]:visible',
-            '[aria-live="assertive"]:visible',
-            '[aria-live="polite"]:visible',
-        )
-        texts: list[str] = []
+        """Read only Instagram status UI, never arbitrary caption/comment text."""
         try:
-            for selector in selectors:
-                nodes = page.locator(selector)
-                for index in range(min(nodes.count(), 8)):
-                    text = _normalized_text(nodes.nth(index).inner_text(timeout=1_500))
-                    if text:
-                        texts.append(text)
-            if not texts and page.locator("article").count() == 0:
-                texts.append(_normalized_text(page.locator("body").inner_text(timeout=2_000)))
+            surfaces = self.page.locator(_STATUS_SURFACE_SELECTOR)
+            texts: list[str] = []
+            for index in range(min(surfaces.count(), 12)):
+                surface = surfaces.nth(index)
+                if surface.locator("xpath=ancestor::article").count():
+                    continue
+                text = surface.inner_text(timeout=2_000)
+                if text:
+                    texts.append(text)
         except Exception as exc:
-            self.session._raise_browser_error(exc)
+            self.session.raise_browser_error(exc)
+
         for text in texts:
-            lower = text.lower()
-            if any(phrase in lower for phrase in RESTRICTION_PHRASES):
-                return text[:300]
+            normalized = normalize_ui_text(text)
+            for phrase in RESTRICTION_PHRASES:
+                if normalize_ui_text(phrase) in normalized:
+                    return truncate_text(text)
         return None
 
     def is_caught_up(self) -> bool:
-        try:
-            regions = self.page.locator('h1, h2, h3, [role="status"], [aria-live="polite"]')
-            for index in range(min(regions.count(), 40)):
-                text = _normalized_text(regions.nth(index).inner_text(timeout=800)).lower()
-                if text and any(label.lower() in text for label in CAUGHT_UP_LABELS):
+        """Match the feed marker outside articles so captions cannot stop a scan."""
+        for phrase in CAUGHT_UP_PHRASES:
+            try:
+                matches = self.page.get_by_text(re.compile(re.escape(phrase), re.IGNORECASE), exact=False)
+                for index in range(min(matches.count(), 12)):
+                    match = matches.nth(index)
+                    if not match.is_visible():
+                        continue
+                    if match.locator("xpath=ancestor::article").count():
+                        continue
                     return True
-        except Exception as exc:
-            self.session._raise_browser_error(exc)
+            except Exception as exc:
+                self.session.raise_browser_error(exc)
         return False
+
+    @staticmethod
+    def _is_following_url(url: str) -> bool:
+        parsed = urlparse(str(url or ""))
+        return is_instagram_hostname(parsed.hostname) and parse_qs(parsed.query).get("variant") == ["following"]
+
+    def _looks_logged_out(self) -> bool:
+        page = self.page
+        try:
+            if "/accounts/login" in page.url:
+                return True
+            return page.locator('input[name="username"]').count() > 0
+        except Exception as exc:
+            self.session.raise_browser_error(exc)
+
+    def _dismiss_common_dialogs(self) -> None:
+        for label in DISMISS_BUTTON_LABELS:
+            try:
+                button = self.page.get_by_role("button", name=label, exact=True)
+                if button.count() and button.first.is_visible():
+                    button.first.click(timeout=2_000)
+                    self.page.wait_for_timeout(300)
+            except Exception:
+                continue
 
 
 class PlaywrightFeedPost:
-    def __init__(self, session: ChromeSession, article: Locator):
+    def __init__(self, session: ChromeBrowserSession, article: Locator):
         self.session = session
         self.article = article
         self._key: str | None = None
         self._username: str | None = None
-        self._reason: str | None | object = _UNSET
+        self._exclusion_reason: str | None | object = _UNSET
 
     @property
     def key(self) -> str:
@@ -336,94 +528,190 @@ class PlaywrightFeedPost:
 
     @property
     def exclusion_reason(self) -> str | None:
-        if self._reason is _UNSET:
-            self._reason = self._detect_exclusion()
-        return self._reason if isinstance(self._reason, str) else None
+        if self._exclusion_reason is _UNSET:
+            self._exclusion_reason = self._detect_exclusion_reason()
+        return self._exclusion_reason if isinstance(self._exclusion_reason, str) else None
+
+    @property
+    def is_sponsored(self) -> bool:
+        """Compatibility property for callers written against the first prototype."""
+        return self.exclusion_reason == "sponsored"
 
     @property
     def like_state(self) -> LikeState:
-        if self._find_main_action(UNLIKE_LABELS) is not None:
+        unlike = self._find_main_control(UNLIKE_LABELS)
+        if unlike is not None:
+            unlike.dispose()
             return "liked"
-        if self._find_main_action(LIKE_LABELS) is not None:
+        like = self._find_main_control(LIKE_LABELS)
+        if like is not None:
+            like.dispose()
             return "unliked"
         return "unknown"
 
     def click_like(self) -> bool:
-        control = self._find_main_action(LIKE_LABELS)
+        control = self._find_main_control(LIKE_LABELS)
         if control is None:
             return self.like_state == "liked"
         try:
-            control.scroll_into_view_if_needed(timeout=4_000)
+            control.scroll_into_view_if_needed(timeout=5_000)
             control.click(timeout=5_000)
-            self.session.page.wait_for_timeout(700)
         except Exception as exc:
-            self.session._raise_browser_error(exc)
-        return self.like_state == "liked"
+            self.session.raise_browser_error(exc)
+        finally:
+            try:
+                control.dispose()
+            except Exception:
+                pass
+
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            if self.like_state == "liked":
+                return True
+            try:
+                self.session.page.wait_for_timeout(250)
+            except Exception as exc:
+                self.session.raise_browser_error(exc)
+        return False
 
     def _extract_key(self) -> str:
         try:
             links = self.article.locator('a[href*="/p/"], a[href*="/reel/"], a[href*="/tv/"]')
-            for index in range(min(links.count(), 20)):
-                key = normalize_post_key(links.nth(index).get_attribute("href") or "")
-                if key:
+            for index in range(min(links.count(), 12)):
+                href = links.nth(index).get_attribute("href") or ""
+                key = normalize_post_key(href)
+                if key.startswith(("/p/", "/reel/", "/tv/")):
                     return key
         except Exception as exc:
-            self.session._raise_browser_error(exc)
+            self.session.raise_browser_error(exc)
         return ""
 
     def _extract_username(self) -> str:
         try:
-            links = self.article.locator('header a[href^="/"], a[href^="/"]')
+            links = self.article.locator('a[href^="/"]')
             for index in range(min(links.count(), 20)):
-                path = urlparse(links.nth(index).get_attribute("href") or "").path
+                href = links.nth(index).get_attribute("href") or ""
+                path = urlparse(href).path
                 parts = [part for part in path.split("/") if part]
                 if len(parts) == 1 and parts[0].lower() not in RESERVED_PATHS:
                     return parts[0]
         except Exception as exc:
-            self.session._raise_browser_error(exc)
+            self.session.raise_browser_error(exc)
         return ""
 
-    def _detect_exclusion(self) -> str | None:
-        try:
-            article_box = self.article.bounding_box()
-            if not article_box:
-                return None
-            limit_y = article_box["y"] + max(160, article_box["height"] * 0.4)
-            for reason, labels in (("sponsored", SPONSORED_LABELS), ("recommended", RECOMMENDED_LABELS)):
-                for label in labels:
-                    matches = self.article.get_by_text(label, exact=True)
-                    for index in range(min(matches.count(), 5)):
-                        node = matches.nth(index)
-                        if node.is_visible() and (box := node.bounding_box()) and box["y"] <= limit_y:
-                            return reason
-        except Exception as exc:
-            self.session._raise_browser_error(exc)
+    def _detect_exclusion_reason(self) -> str | None:
+        if self._has_metadata_label(SPONSORED_LABELS):
+            return "sponsored"
+        if self._has_metadata_label(RECOMMENDATION_LABELS):
+            return "recommended"
         return None
 
-    def _find_main_action(self, labels: tuple[str, ...]) -> Locator | None:
-        candidates: list[tuple[float, Any]] = []
+    def _has_metadata_label(self, labels: tuple[str, ...]) -> bool:
+        """Recognize header/top metadata, not matching words in captions/comments."""
         try:
             article_box = self.article.bounding_box()
-            if not article_box:
-                return None
-            for label in labels:
-                escaped = label.replace('"', '\\"')
-                locator = self.article.locator(
-                    f'button:has(svg[aria-label="{escaped}"]), [role="button"]:has(svg[aria-label="{escaped}"])'
-                )
-                for index in range(min(locator.count(), 12)):
-                    node = locator.nth(index)
-                    if not node.is_visible():
-                        continue
-                    if node.evaluate("el => Boolean(el.closest('li'))"):
-                        continue
-                    box = node.bounding_box()
-                    if not box or box["y"] > article_box["y"] + article_box["height"] * 0.9:
-                        continue
-                    candidates.append((box["width"] * box["height"], node))
+            headers = self.article.locator("header")
         except Exception as exc:
-            self.session._raise_browser_error(exc)
-        return max(candidates, key=lambda item: item[0])[1] if candidates else None
+            self.session.raise_browser_error(exc)
+
+        for label in labels:
+            try:
+                for header_index in range(min(headers.count(), 3)):
+                    matches = headers.nth(header_index).get_by_text(label, exact=True)
+                    for index in range(min(matches.count(), 5)):
+                        if matches.nth(index).is_visible():
+                            return True
+
+                # Instagram occasionally renders the marker outside a semantic
+                # header. Accept it only in the top metadata band of the article.
+                matches = self.article.get_by_text(label, exact=True)
+                for index in range(min(matches.count(), 10)):
+                    match = matches.nth(index)
+                    if not match.is_visible():
+                        continue
+                    box = match.bounding_box()
+                    if not article_box or not box:
+                        continue
+                    metadata_limit = article_box["y"] + min(220.0, max(80.0, article_box["height"] * 0.25))
+                    if box["y"] + box["height"] <= metadata_limit:
+                        return True
+            except Exception as exc:
+                self.session.raise_browser_error(exc)
+        return False
+
+    def _find_main_control(self, labels: tuple[str, ...]) -> ElementHandle | None:
+        """Select the post action-bar control rather than comment-heart buttons."""
+        try:
+            handle = self.article.evaluate_handle(
+                """(article, payload) => {
+                    const normalize = value => (value || '').trim();
+                    const wantedLabels = new Set(payload.labels);
+                    const allLikeLabels = new Set(payload.allLikeLabels);
+                    const peerLabels = new Set(payload.peers);
+                    const readLabel = button => {
+                        const own = normalize(button.getAttribute('aria-label'));
+                        const icon = button.querySelector('svg[aria-label]');
+                        return own || normalize(icon?.getAttribute('aria-label'));
+                    };
+                    const visible = button => {
+                        const rect = button.getBoundingClientRect();
+                        const style = window.getComputedStyle(button);
+                        const hidden = style.visibility === 'hidden' || style.display === 'none';
+                        return !hidden && rect.width > 0 && rect.height > 0;
+                    };
+
+                    // Instagram's main post controls live in a section together
+                    // with Comment/Share. Once that section is found, never fall
+                    // back to a comment-heart button elsewhere in the article.
+                    for (const section of article.querySelectorAll('section')) {
+                        const buttons = [...section.querySelectorAll('button, [role="button"]')];
+                        const labels = buttons.map(readLabel);
+                        const hasLikeControl = labels.some(label => allLikeLabels.has(label));
+                        const hasActionPeer = labels.some(label => peerLabels.has(label));
+                        if (!hasLikeControl || !hasActionPeer) continue;
+                        return buttons.find(button => wantedLabels.has(readLabel(button)) && visible(button)) || null;
+                    }
+
+                    const candidates = [];
+                    for (const button of article.querySelectorAll('button, [role="button"]')) {
+                        if (!wantedLabels.has(readLabel(button)) || !visible(button)) continue;
+                        const rect = button.getBoundingClientRect();
+                        candidates.push({button, score: rect.width * rect.height - Math.max(rect.top, 0) / 100000});
+                    }
+                    candidates.sort((a, b) => b.score - a.score);
+                    return candidates.length ? candidates[0].button : null;
+                }""",
+                {
+                    "labels": list(labels),
+                    "allLikeLabels": list(LIKE_LABELS + UNLIKE_LABELS),
+                    "peers": list(COMMENT_LABELS + SHARE_LABELS),
+                },
+            )
+        except Exception as exc:
+            self.session.raise_browser_error(exc)
+
+        element = handle.as_element()
+        if element is None:
+            handle.dispose()
+            return None
+        return element
 
 
-_UNSET = object()
+def is_instagram_hostname(hostname: str | None) -> bool:
+    labels = str(hostname or "").lower().rstrip(".").split(".")
+    return len(labels) >= 2 and labels[-2:] == ["instagram", "com"]
+
+
+def normalize_ui_text(value: str) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip().casefold()
+
+
+def safe_error_text(exc: Exception) -> str:
+    return truncate_text(str(exc).replace("\n", " "), limit=240) or type(exc).__name__
+
+
+def truncate_text(value: str, limit: int = 300) -> str:
+    normalized = re.sub(r"\s+", " ", str(value or "")).strip()
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[: limit - 1] + "…"

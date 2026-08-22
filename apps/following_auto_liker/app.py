@@ -11,11 +11,9 @@ from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from tkinter import END, LEFT, RIGHT, StringVar, Text, Tk, messagebox, ttk
 
-from .config import AppConfig, Storage
-from .engine import FollowingAutoLiker
-from .model import AutoLikerError
-
-APP_TITLE = "팔로잉 자동 좋아요"
+from apps.following_auto_liker.engine import AutoLikerError, FollowingAutoLiker
+from apps.following_auto_liker.storage import AppConfig, Storage
+from apps.following_auto_liker.view import APP_TITLE, INTRO_TEXT, LOGIN_TEXT, RISK_TEXT
 
 
 def configure_logging(storage: Storage) -> logging.Logger:
@@ -23,7 +21,13 @@ def configure_logging(storage: Storage) -> logging.Logger:
     logger.setLevel(logging.INFO)
     if logger.handlers:
         return logger
-    handler = RotatingFileHandler(storage.paths.log, maxBytes=1_000_000, backupCount=2, encoding="utf-8")
+
+    handler = RotatingFileHandler(
+        storage.paths.log,
+        maxBytes=1_000_000,
+        backupCount=2,
+        encoding="utf-8",
+    )
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
     logger.addHandler(handler)
     return logger
@@ -33,8 +37,8 @@ class AutoLikerApp(Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title(APP_TITLE)
-        self.geometry("800x780")
-        self.minsize(740, 700)
+        self.geometry("780x760")
+        self.minsize(720, 680)
 
         self.storage = Storage.default()
         self.logger = configure_logging(self.storage)
@@ -58,6 +62,7 @@ class AutoLikerApp(Tk):
         self.max_delay_var = StringVar(value=str(config.max_delay_seconds))
         self.max_likes_var = StringVar(value=str(config.max_likes_per_cycle))
         self.max_scroll_var = StringVar(value=str(config.max_scroll_rounds))
+
         self.status_var = StringVar(value="중지됨")
         self.likes_var = StringVar(value="0개")
         self.last_scan_var = StringVar(value="아직 없음")
@@ -65,40 +70,52 @@ class AutoLikerApp(Tk):
     def _build_ui(self) -> None:
         container = ttk.Frame(self, padding=18)
         container.pack(fill="both", expand=True)
+
         ttk.Label(container, text=APP_TITLE, font=("", 19, "bold")).pack(anchor="w")
-        ttk.Label(
-            container,
-            text=(
-                "전용 Google Chrome 창에서 Instagram의 시간순 팔로잉 피드를 끝까지 확인하고, "
-                "광고·추천·이미 좋아요한 글을 제외한 미좋아요 게시물에 좋아요를 누릅니다."
-            ),
-            wraplength=750,
-            justify=LEFT,
-        ).pack(anchor="w", pady=(8, 4))
-        ttk.Label(
-            container,
-            text=(
-                "처음 시작할 때 열린 Chrome에서 직접 로그인하세요. 앱은 Instagram 아이디, 비밀번호, "
-                "2단계 인증 코드를 받거나 저장하지 않습니다."
-            ),
-            wraplength=750,
-            justify=LEFT,
-        ).pack(anchor="w", pady=(0, 12))
+        ttk.Label(container, text=INTRO_TEXT, wraplength=730, justify=LEFT).pack(anchor="w", pady=(8, 3))
+        ttk.Label(container, text=LOGIN_TEXT, wraplength=730, justify=LEFT).pack(anchor="w", pady=(0, 12))
 
         settings = ttk.LabelFrame(container, text="설정", padding=12)
         settings.pack(fill="x")
-        self._setting_row(settings, 0, "피드 확인 간격", self.interval_var, "분", "끝까지 확인한 뒤 다시 시작할 간격")
         self._setting_row(
-            settings, 1, "좋아요 전 최소 대기", self.min_delay_var, "초", "각 좋아요 사이 무작위 대기의 하한"
+            settings,
+            0,
+            "피드 확인 간격",
+            self.interval_var,
+            "분",
+            "한 번 끝까지 확인한 뒤 다시 시작할 간격",
         )
         self._setting_row(
-            settings, 2, "좋아요 전 최대 대기", self.max_delay_var, "초", "각 좋아요 사이 무작위 대기의 상한"
+            settings,
+            1,
+            "좋아요 전 최소 대기",
+            self.min_delay_var,
+            "초",
+            "각 좋아요 사이에 무작위로 기다릴 최소 시간",
         )
         self._setting_row(
-            settings, 3, "회차당 최대 좋아요", self.max_likes_var, "개", "0이면 발견한 미좋아요 글을 모두 처리"
+            settings,
+            2,
+            "좋아요 전 최대 대기",
+            self.max_delay_var,
+            "초",
+            "최소 시간 이상, 이 시간 이하에서 무작위 선택",
         )
         self._setting_row(
-            settings, 4, "최대 피드 화면 수", self.max_scroll_var, "회", "피드가 끝나지 않을 때의 처리 상한"
+            settings,
+            3,
+            "회차당 최대 좋아요",
+            self.max_likes_var,
+            "개",
+            "0이면 제한 없이 발견한 미좋아요 글을 모두 처리",
+        )
+        self._setting_row(
+            settings,
+            4,
+            "최대 스크롤 횟수",
+            self.max_scroll_var,
+            "회",
+            "피드가 끝나지 않을 때의 무한 스크롤 방지 한도",
         )
         settings.columnconfigure(3, weight=1)
 
@@ -108,25 +125,39 @@ class AutoLikerApp(Tk):
         self.start_button.pack(side=LEFT)
         self.stop_button = ttk.Button(actions, text="중지", command=self._stop, state="disabled")
         self.stop_button.pack(side=LEFT, padx=(8, 0))
-        ttk.Button(actions, text="데이터 폴더 열기", command=self._open_data_folder).pack(side=RIGHT)
-        self.clear_button = ttk.Button(actions, text="전용 Chrome 로그인 지우기", command=self._clear_browser_data)
+        self.open_folder_button = ttk.Button(actions, text="데이터 폴더 열기", command=self._open_data_folder)
+        self.open_folder_button.pack(side=RIGHT)
+        self.clear_button = ttk.Button(
+            actions,
+            text="전용 Chrome 데이터 지우기",
+            command=self._clear_browser_data,
+        )
         self.clear_button.pack(side=RIGHT, padx=(0, 8))
 
         status = ttk.LabelFrame(container, text="현재 상태", padding=12)
         status.pack(fill="x")
         ttk.Label(status, text="상태").grid(row=0, column=0, sticky="w")
         ttk.Label(status, textvariable=self.status_var, font=("", 10, "bold")).grid(
-            row=0, column=1, sticky="w", padx=(14, 0)
+            row=0,
+            column=1,
+            sticky="w",
+            padx=(14, 0),
         )
         ttk.Label(status, text="이번 실행 좋아요").grid(row=1, column=0, sticky="w", pady=(6, 0))
         ttk.Label(status, textvariable=self.likes_var).grid(row=1, column=1, sticky="w", padx=(14, 0), pady=(6, 0))
         ttk.Label(status, text="마지막 확인").grid(row=2, column=0, sticky="w", pady=(6, 0))
-        ttk.Label(status, textvariable=self.last_scan_var).grid(row=2, column=1, sticky="w", padx=(14, 0), pady=(6, 0))
+        ttk.Label(status, textvariable=self.last_scan_var).grid(
+            row=2,
+            column=1,
+            sticky="w",
+            padx=(14, 0),
+            pady=(6, 0),
+        )
         status.columnconfigure(1, weight=1)
 
         log_frame = ttk.LabelFrame(container, text="진행 기록", padding=8)
         log_frame.pack(fill="both", expand=True, pady=(12, 0))
-        self.log_text = Text(log_frame, height=14, wrap="word", state="disabled")
+        self.log_text = Text(log_frame, height=12, wrap="word", state="disabled")
         scrollbar = ttk.Scrollbar(log_frame, orient="vertical", command=self.log_text.yview)
         self.log_text.configure(yscrollcommand=scrollbar.set)
         self.log_text.pack(side=LEFT, fill="both", expand=True)
@@ -134,18 +165,18 @@ class AutoLikerApp(Tk):
 
         bottom = ttk.Frame(container)
         bottom.pack(fill="x", pady=(8, 0))
-        ttk.Label(
-            bottom,
-            text=(
-                "기본 3~5초 간격은 빠른 설정입니다. Instagram이 활동 제한을 표시하면 앱은 즉시 중지하며, "
-                "제한·본인 확인을 우회하지 않습니다."
-            ),
-            wraplength=630,
-            justify=LEFT,
-        ).pack(side=LEFT, fill="x", expand=True)
+        ttk.Label(bottom, text=RISK_TEXT, wraplength=620, justify=LEFT).pack(side=LEFT, fill="x", expand=True)
         ttk.Button(bottom, text="로그 복사", command=self._copy_log).pack(side=RIGHT, padx=(10, 0))
 
-    def _setting_row(self, parent, row: int, label: str, variable: StringVar, unit: str, description: str) -> None:
+    def _setting_row(
+        self,
+        parent: ttk.LabelFrame,
+        row: int,
+        label: str,
+        variable: StringVar,
+        unit: str,
+        description: str,
+    ) -> None:
         ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", pady=4)
         entry = ttk.Entry(parent, textvariable=variable, width=9)
         entry.grid(row=row, column=1, sticky="w", padx=(12, 4), pady=4)
@@ -155,17 +186,20 @@ class AutoLikerApp(Tk):
 
     def _read_config(self) -> AppConfig:
         try:
-            config = AppConfig(
-                check_interval_minutes=int(self.interval_var.get().strip()),
-                min_delay_seconds=int(self.min_delay_var.get().strip()),
-                max_delay_seconds=int(self.max_delay_var.get().strip()),
-                max_likes_per_cycle=int(self.max_likes_var.get().strip()),
-                max_scroll_rounds=int(self.max_scroll_var.get().strip()),
-                unchanged_scroll_rounds=self.saved_config.unchanged_scroll_rounds,
-            )
+            values = {
+                "check_interval_minutes": int(self.interval_var.get().strip()),
+                "min_delay_seconds": int(self.min_delay_var.get().strip()),
+                "max_delay_seconds": int(self.max_delay_var.get().strip()),
+                "max_likes_per_cycle": int(self.max_likes_var.get().strip()),
+                "max_scroll_rounds": int(self.max_scroll_var.get().strip()),
+            }
         except ValueError as exc:
             raise ValueError("설정값은 숫자로 입력해 주세요.") from exc
-        return config.validate()
+
+        return AppConfig(
+            **values,
+            unchanged_scroll_rounds=self.saved_config.unchanged_scroll_rounds,
+        ).validate()
 
     def _start(self) -> None:
         if self.running:
@@ -173,19 +207,27 @@ class AutoLikerApp(Tk):
         try:
             config = self._read_config()
             self.storage.save_config(config)
-        except (ValueError, OSError) as exc:
+        except ValueError as exc:
             messagebox.showerror(APP_TITLE, str(exc))
             return
+        except OSError as exc:
+            messagebox.showerror(APP_TITLE, f"설정을 저장하지 못했습니다: {exc}")
+            return
+
         self.saved_config = config
         self.stop_event = threading.Event()
         self.running = True
         self.likes_var.set("0개")
         self.last_scan_var.set("아직 없음")
         self.status_var.set("Chrome을 여는 중")
-        self._set_running_controls(True)
+        self._set_controls_running(True)
         self._append_log("자동 좋아요를 시작합니다.")
+
         self.worker = threading.Thread(
-            target=self._worker_main, args=(config,), daemon=False, name="following-auto-liker"
+            target=self._worker_main,
+            args=(config,),
+            daemon=False,
+            name="following-auto-liker",
         )
         self.worker.start()
 
@@ -193,8 +235,8 @@ class AutoLikerApp(Tk):
         engine = FollowingAutoLiker(
             config,
             self.storage,
-            on_log=lambda message: self.events.put(("log", message)),
-            on_status=lambda status: self.events.put(("status", status)),
+            on_log=self._engine_log,
+            on_status=self._engine_status,
         )
         try:
             engine.run(self.stop_event)
@@ -204,18 +246,28 @@ class AutoLikerApp(Tk):
         except Exception as exc:
             self.logger.exception("Unexpected auto-liker failure")
             self.events.put(
-                ("error", f"예상하지 못한 오류로 중지했습니다. app.log를 확인하세요. ({type(exc).__name__})")
+                (
+                    "error",
+                    f"예상하지 못한 오류로 중지했습니다. 데이터 폴더의 app.log를 확인하세요. ({type(exc).__name__})",
+                )
             )
         finally:
             self.events.put(("stopped", None))
+
+    def _engine_log(self, message: str) -> None:
+        self.logger.info(message)
+        self.events.put(("log", message))
+
+    def _engine_status(self, status: dict[str, object]) -> None:
+        self.events.put(("status", status))
 
     def _stop(self) -> None:
         if not self.running:
             return
         self.stop_event.set()
         self.status_var.set("중지 요청됨")
+        self._append_log("중지를 요청했습니다. 현재 대기나 브라우저 작업을 마친 뒤 Chrome을 닫습니다.")
         self.stop_button.configure(state="disabled")
-        self._append_log("중지를 요청했습니다. 현재 대기 또는 브라우저 작업을 마친 뒤 Chrome을 닫습니다.")
 
     def _drain_events(self) -> None:
         try:
@@ -232,14 +284,13 @@ class AutoLikerApp(Tk):
                         messagebox.showerror(APP_TITLE, str(payload))
                 elif kind == "stopped":
                     self.running = False
-                    self._set_running_controls(False)
-                    if self.status_var.get() != "오류로 중지":
+                    self._set_controls_running(False)
+                    if self.status_var.get() not in {"오류로 중지"}:
                         self.status_var.set("중지됨")
         except queue.Empty:
             pass
-        if self.closing:
-            self._finish_close()
-        else:
+
+        if not self.closing:
             self.after(100, self._drain_events)
 
     def _apply_status(self, status: dict[str, object]) -> None:
@@ -250,51 +301,55 @@ class AutoLikerApp(Tk):
         last_scan = str(status.get("last_scan_at") or "")
         if last_scan:
             try:
-                last_scan = datetime.fromisoformat(last_scan).strftime("%Y-%m-%d %H:%M:%S")
+                parsed = datetime.fromisoformat(last_scan)
+                self.last_scan_var.set(parsed.strftime("%Y-%m-%d %H:%M:%S"))
             except ValueError:
-                pass
-            self.last_scan_var.set(last_scan)
+                self.last_scan_var.set(last_scan)
 
-    def _set_running_controls(self, running: bool) -> None:
-        state = "disabled" if running else "normal"
+    def _set_controls_running(self, running: bool) -> None:
+        entry_state = "disabled" if running else "normal"
         for widget in self.editable_widgets:
-            widget.configure(state=state)
+            widget.configure(state=entry_state)
         self.start_button.configure(state="disabled" if running else "normal")
         self.stop_button.configure(state="normal" if running else "disabled")
         self.clear_button.configure(state="disabled" if running else "normal")
 
     def _append_log(self, message: str) -> None:
-        stamp = datetime.now().strftime("%H:%M:%S")
+        timestamp = datetime.now().strftime("%H:%M:%S")
         self.log_text.configure(state="normal")
-        self.log_text.insert(END, f"[{stamp}] {message}\n")
+        self.log_text.insert(END, f"[{timestamp}] {message}\n")
         self.log_text.see(END)
         self.log_text.configure(state="disabled")
 
     def _copy_log(self) -> None:
+        content = self.log_text.get("1.0", "end-1c")
         self.clipboard_clear()
-        self.clipboard_append(self.log_text.get("1.0", "end-1c"))
+        self.clipboard_append(content)
         self.update_idletasks()
 
     def _clear_browser_data(self) -> None:
         if self.running:
             messagebox.showinfo(APP_TITLE, "먼저 자동 좋아요를 중지해 주세요.")
             return
-        if not self.storage.chrome_profile_has_data():
-            messagebox.showinfo(APP_TITLE, "저장된 전용 Chrome 로그인이 없습니다.")
+        if not self.storage.browser_profile_has_data():
+            messagebox.showinfo(APP_TITLE, "저장된 전용 Chrome 데이터가 없습니다.")
             return
-        if not messagebox.askyesno(
+        confirmed = messagebox.askyesno(
             APP_TITLE,
-            "전용 Chrome의 Instagram 로그인과 쿠키를 모두 지울까요?\n일반 Chrome 데이터에는 영향을 주지 않습니다.",
-        ):
+            "전용 Chrome의 Instagram 로그인, 쿠키와 사이트 데이터를 모두 지울까요?\n"
+            "일반 Chrome의 데이터에는 영향을 주지 않습니다.",
+        )
+        if not confirmed:
             return
         try:
-            self.storage.reset_chrome_profile()
+            self.storage.clear_browser_profile()
         except OSError as exc:
             messagebox.showerror(
-                APP_TITLE, f"Chrome 데이터를 지우지 못했습니다. 열린 전용 Chrome 창을 닫고 다시 시도하세요.\n{exc}"
+                APP_TITLE,
+                f"Chrome 데이터를 지우지 못했습니다. 앱이 열었던 Chrome 창을 닫고 다시 시도하세요.\n{exc}",
             )
             return
-        self._append_log("전용 Chrome 로그인 데이터를 지웠습니다.")
+        self._append_log("전용 Chrome 데이터를 지웠습니다. 다음 시작 때 다시 로그인해야 합니다.")
 
     def _open_data_folder(self) -> None:
         path = str(self.storage.paths.root)
@@ -313,21 +368,27 @@ class AutoLikerApp(Tk):
             return
         self.closing = True
         self.stop_event.set()
-        self.status_var.set("종료 중")
-        self._set_running_controls(True)
-        self._append_log("앱을 종료합니다. Chrome 자동화가 정상 종료될 때까지 기다립니다.")
-        self.after(100, self._finish_close)
+        self.status_var.set("Chrome을 종료하는 중")
+        self._set_controls_running(True)
+        self._append_log(
+            "앱 종료를 요청했습니다. Chrome 프로필 잠금을 남기지 않도록 브라우저가 닫힐 때까지 기다립니다."
+        )
+        self._finish_close()
 
     def _finish_close(self) -> None:
-        if self.worker is not None and self.worker.is_alive():
-            self.after(200, self._finish_close)
+        # Playwright's synchronous API is thread-affine. Do not destroy Tk or
+        # close the browser from this UI thread. The worker's finally block owns
+        # the persistent context and must finish first.
+        if self.worker and self.worker.is_alive():
+            self.after(100, self._finish_close)
             return
         self.destroy()
 
 
 def main() -> None:
     multiprocessing.freeze_support()
-    AutoLikerApp().mainloop()
+    app = AutoLikerApp()
+    app.mainloop()
 
 
 if __name__ == "__main__":

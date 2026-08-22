@@ -1,7 +1,6 @@
 """Chrome-based desktop auto-liker for Instagram's Following feed."""
 
-from .config import AppConfig, Storage
-from .engine import FollowingAutoLiker
-from .scanner import FollowingFeedScanner
+from .engine import FollowingAutoLiker, FollowingFeedScanner
+from .storage import AppConfig, Storage
 
 __all__ = ["AppConfig", "FollowingAutoLiker", "FollowingFeedScanner", "Storage"]

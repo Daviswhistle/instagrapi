@@ -71,6 +71,8 @@ class FollowingFeed(Protocol):
 
     def posts(self) -> Iterable[FeedPost]: ...
 
+    def posts_before_caught_up(self) -> tuple[Iterable[FeedPost], bool]: ...
+
     def scroll_for_more(self) -> bool: ...
 
     def restriction_message(self) -> str | None: ...
@@ -139,7 +141,8 @@ class FollowingFeedScanner:
                 break
 
             newly_discovered = 0
-            for post in feed.posts():
+            batch_posts, caught_up_visible = feed.posts_before_caught_up()
+            for post in batch_posts:
                 if stop_event and stop_event.is_set():
                     summary.stopped = True
                     break
@@ -212,7 +215,7 @@ class FollowingFeedScanner:
             if summary.stopped or summary.max_likes_reached:
                 break
 
-            if feed.is_caught_up():
+            if caught_up_visible or feed.is_caught_up():
                 summary.caught_up = True
                 break
 

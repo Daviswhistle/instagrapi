@@ -56,12 +56,13 @@ class FakePost:
 
 
 class FakeFeed:
-    def __init__(self, pages, *, caught_up_at=None):
+    def __init__(self, pages, *, caught_up_at=None, caught_up_boundaries=None):
         self.pages = pages
         self.index = 0
         self.open_count = 0
         self.restriction = None
         self.caught_up_at = caught_up_at
+        self.caught_up_boundaries = caught_up_boundaries or {}
 
     def open_following(self):
         self.open_count += 1
@@ -69,6 +70,13 @@ class FakeFeed:
 
     def posts(self):
         return list(self.pages[self.index])
+
+    def posts_before_caught_up(self):
+        posts = self.posts()
+        boundary = self.caught_up_boundaries.get(self.index)
+        if boundary is None:
+            return posts, self.is_caught_up()
+        return posts[: max(0, int(boundary))], True
 
     def scroll_for_more(self):
         if self.index + 1 >= len(self.pages):
@@ -165,6 +173,22 @@ class FollowingAutoLikerRegressionTestCase(unittest.TestCase):
         self.assertEqual(summary.liked, 1)
         self.assertEqual(second.clicks, 0)
         self.assertEqual(feed.index, 0)
+
+    def test_caught_up_boundary_skips_older_posts_loaded_in_same_page(self):
+        recent = FakePost("/p/recent/")
+        older = FakePost("/p/older/")
+        feed = FakeFeed(
+            [[recent, older]],
+            caught_up_boundaries={0: 1},
+        )
+
+        summary = self.scanner().scan_once(feed)
+
+        self.assertTrue(summary.caught_up)
+        self.assertEqual(summary.discovered, 1)
+        self.assertEqual(summary.liked, 1)
+        self.assertEqual(recent.clicks, 1)
+        self.assertEqual(older.clicks, 0)
 
     def test_restriction_after_like_stops_immediately_and_preserves_count(self):
         feed = FakeFeed([[]])
@@ -429,6 +453,42 @@ class BrowserDomRegressionTestCase(unittest.TestCase):
 
         self.page.set_content("<main><div>You're all caught up</div></main>")
         self.assertTrue(feed.is_caught_up())
+
+    def test_caught_up_markers_are_recognized_in_every_supported_locale(self):
+        feed = PlaywrightFollowingFeed(self.session)
+        phrases = (
+            "You're all caught up",
+            "모두 확인했습니다",
+            "すべてチェック済みです",
+            "Estás al día",
+            "Vous êtes à jour",
+            "Du bist auf dem neuesten Stand",
+            "Você está em dia",
+            "Вы всё просмотрели",
+            "以上是最新动态",
+            "以上是最新動態",
+        )
+        for phrase in phrases:
+            with self.subTest(phrase=phrase):
+                self.page.set_content(f"<main><div id='caught-up'>{phrase}</div></main>")
+                self.assertTrue(feed.is_caught_up())
+
+    def test_posts_before_caught_up_excludes_articles_below_marker(self):
+        self.page.set_content(
+            """
+            <main>
+              <article><a href="/p/recent/">recent</a></article>
+              <div id="caught-up">Estás al día</div>
+              <article><a href="/p/older/">older</a></article>
+            </main>
+            """
+        )
+        feed = PlaywrightFollowingFeed(self.session)
+
+        posts, caught_up = feed.posts_before_caught_up()
+
+        self.assertTrue(caught_up)
+        self.assertEqual([post.key for post in posts], ["/p/recent/"])
 
 
 if __name__ == "__main__":

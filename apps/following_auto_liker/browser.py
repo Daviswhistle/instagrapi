@@ -159,11 +159,40 @@ RESTRICTION_PHRASES = (
     "請等待幾分鐘",
 )
 CAUGHT_UP_PHRASES = (
+    # English
     "you're all caught up",
     "you’re all caught up",
+    # Korean
     "모두 확인했습니다",
     "새 게시물을 모두 확인했습니다",
     "최신 게시물을 모두 확인했습니다",
+    # Japanese
+    "すべてチェック済みです",
+    "最新の投稿は以上です",
+    "新しい投稿は以上です",
+    "すべての新しい投稿をチェックしました",
+    # Spanish
+    "estás al día",
+    "ya estás al día",
+    "has visto todas las publicaciones nuevas",
+    "ya viste todas las publicaciones nuevas",
+    # French
+    "vous êtes à jour",
+    "vous avez tout vu",
+    "vous avez vu toutes les nouvelles publications",
+    # German
+    "du bist auf dem neuesten stand",
+    "du hast alles gesehen",
+    "du hast alle neuen beiträge gesehen",
+    # Portuguese
+    "você está em dia",
+    "você viu tudo",
+    "você viu todas as publicações novas",
+    # Russian
+    "вы всё просмотрели",
+    "вы все просмотрели",
+    "вы просмотрели все новые публикации",
+    # Simplified / Traditional Chinese
     "以上是最新动态",
     "以上是最新動態",
 )
@@ -268,6 +297,53 @@ _STATUS_SURFACE_SELECTOR = (
     '[role="dialog"]:visible, [role="alert"]:visible, [role="status"]:visible, '
     '[aria-live="assertive"]:visible, [aria-live="polite"]:visible'
 )
+
+
+_CAUGHT_UP_BOUNDARY_SCRIPT = r"""
+(phrases) => {
+  const normalize = value =>
+    (value || "").replace(/\s+/g, " ").trim().toLocaleLowerCase();
+  const wanted = phrases.map(normalize);
+  const root = document.querySelector("main") || document.body;
+  const isVisible = element => {
+    const style = window.getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    return (
+      style.display !== "none" &&
+      style.visibility !== "hidden" &&
+      style.opacity !== "0" &&
+      rect.width > 0 &&
+      rect.height > 0
+    );
+  };
+
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let marker = null;
+  while (walker.nextNode()) {
+    const textNode = walker.currentNode;
+    const parent = textNode.parentElement;
+    if (!parent || parent.closest("article") || !isVisible(parent)) continue;
+    const text = normalize(textNode.nodeValue);
+    if (text && wanted.some(phrase => text.includes(phrase))) {
+      marker = parent;
+      break;
+    }
+  }
+
+  const articles = [...document.querySelectorAll("article")];
+  if (!marker) return {found: false, boundary: articles.length};
+
+  let boundary = articles.length;
+  for (let index = 0; index < articles.length; index += 1) {
+    const relation = marker.compareDocumentPosition(articles[index]);
+    if (relation & Node.DOCUMENT_POSITION_FOLLOWING) {
+      boundary = index;
+      break;
+    }
+  }
+  return {found: true, boundary};
+}
+"""
 
 
 class ChromeBrowserSession:
@@ -555,6 +631,24 @@ class PlaywrightFollowingFeed:
                 posts.append(post)
         return posts
 
+    def posts_before_caught_up(self) -> tuple[list[PlaywrightFeedPost], bool]:
+        """Return only posts above the first visible caught-up marker."""
+        self._dismiss_common_dialogs()
+        marker_found, boundary = self._caught_up_boundary()
+        try:
+            articles = self.page.locator("article")
+            count = articles.count()
+        except Exception as exc:
+            self.session.raise_browser_error(exc)
+
+        limit = min(count, boundary) if marker_found else count
+        posts = []
+        for index in range(limit):
+            post = PlaywrightFeedPost(self.session, articles.nth(index))
+            if post.key:
+                posts.append(post)
+        return posts, marker_found
+
     def scroll_for_more(self) -> bool:
         self._dismiss_common_dialogs()
         page = self.page
@@ -607,20 +701,27 @@ class PlaywrightFollowingFeed:
         return None
 
     def is_caught_up(self) -> bool:
-        """Match the feed marker outside articles so captions cannot stop a scan."""
-        for phrase in CAUGHT_UP_PHRASES:
-            try:
-                matches = self.page.get_by_text(re.compile(re.escape(phrase), re.IGNORECASE), exact=False)
-                for index in range(min(matches.count(), 12)):
-                    match = matches.nth(index)
-                    if not match.is_visible():
-                        continue
-                    if match.locator("xpath=ancestor::article").count():
-                        continue
-                    return True
-            except Exception as exc:
-                self.session.raise_browser_error(exc)
-        return False
+        """Match the localized feed marker outside articles."""
+        found, _boundary = self._caught_up_boundary()
+        return found
+
+    def _caught_up_boundary(self) -> tuple[bool, int]:
+        try:
+            result = self.page.evaluate(
+                _CAUGHT_UP_BOUNDARY_SCRIPT,
+                list(CAUGHT_UP_PHRASES),
+            )
+        except Exception as exc:
+            self.session.raise_browser_error(exc)
+
+        if not isinstance(result, dict):
+            return False, 0
+        found = bool(result.get("found"))
+        try:
+            boundary = max(0, int(result.get("boundary", 0)))
+        except (TypeError, ValueError):
+            boundary = 0
+        return found, boundary
 
     @staticmethod
     def _is_following_url(url: str) -> bool:

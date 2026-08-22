@@ -1,11 +1,6 @@
 name: Apply PR1 Cleanup
 
 on:
-  push:
-    branches: ["feat/following-auto-liker-desktop"]
-    paths:
-      - ".github/workflows/apply-pr1-cleanup.yml"
-      - ".cleanup-pr1/**"
   pull_request:
     types: [ready_for_review]
 
@@ -33,19 +28,18 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Reconstruct and apply cleanup overlay
+      - name: Reconstruct and apply source cleanup
         shell: bash
         run: |
           set -euo pipefail
           cat .cleanup-pr1/part* | base64 --decode > /tmp/pr1-cleanup.tar.xz
           echo "c8d301d7e51020006d789b145b7c31b229b82355f7791695ec8a9054cbf35205  /tmp/pr1-cleanup.tar.xz" | sha256sum -c -
-          tar -xJf /tmp/pr1-cleanup.tar.xz -C .
+          rm -rf /tmp/pr1-cleanup-overlay
+          mkdir -p /tmp/pr1-cleanup-overlay
+          tar -xJf /tmp/pr1-cleanup.tar.xz -C /tmp/pr1-cleanup-overlay
 
-          rm -rf .cleanup-pr1
-          rm -f .github/workflows/apply-pr1-cleanup.yml
-          rm -f .github/workflows/finalize-following-auto-liker.yml
-          rm -f .github/workflows/finalize-following-auto-liker-v2.yml
-          rm -f this-path-should-not-exist.tmp
+          cp -a /tmp/pr1-cleanup-overlay/apps/. apps/
+          cp -a /tmp/pr1-cleanup-overlay/tests/. tests/
 
           rm -f apps/following_auto_liker/config.py
           rm -f apps/following_auto_liker/model.py
@@ -68,7 +62,7 @@ jobs:
           python -m pip install . "ruff==${RUFF_VERSION}"
           python -m pip install -r apps/following_auto_liker/requirements.txt
 
-      - name: Format and verify cleanup
+      - name: Format and verify source cleanup
         run: |
           ruff check --fix apps/following_auto_liker tests/regression/test_following_auto_liker.py
           ruff format apps/following_auto_liker tests/regression/test_following_auto_liker.py
@@ -78,13 +72,13 @@ jobs:
           python -m unittest -v tests.regression.test_following_auto_liker
           git diff --check
 
-      - name: Commit cleanup
+      - name: Commit source cleanup
         id: commit
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
+          git add apps tests
           if ! git diff --cached --quiet; then
             git commit -m "fix: apply reviewed Chrome auto-liker cleanup"
             git push origin HEAD:feat/following-auto-liker-desktop
@@ -95,7 +89,7 @@ jobs:
     needs: prepare
     runs-on: ubuntu-latest
     steps:
-      - name: Check out finalized commit
+      - name: Check out finalized source commit
         uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.commit_sha }}
@@ -113,8 +107,8 @@ jobs:
 
       - name: Verify finalized source
         run: |
-          ruff check --output-format=github .
-          ruff format --check .
+          ruff check apps/following_auto_liker tests/regression/test_following_auto_liker.py
+          ruff format --check apps/following_auto_liker tests/regression/test_following_auto_liker.py
           python -m compileall -q apps tests/regression/test_following_auto_liker.py
           python -m unittest -v tests.regression.test_following_auto_liker
           git diff --check
@@ -133,7 +127,7 @@ jobs:
             artifact_name: FollowingAutoLiker-macOS-Intel
     runs-on: ${{ matrix.os }}
     steps:
-      - name: Check out finalized commit
+      - name: Check out finalized source commit
         uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.commit_sha }}

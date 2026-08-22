@@ -5,10 +5,10 @@ from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Literal, Protocol
 from urllib.parse import urlparse
 
+LikeState = Literal["unliked", "liked", "unknown"]
 LogCallback = Callable[[str], None]
 StatusCallback = Callable[[dict[str, Any]], None]
 WaitFunction = Callable[[threading.Event | None, float], bool]
-LikeState = Literal["unliked", "liked", "unknown"]
 
 
 class AutoLikerError(RuntimeError):
@@ -95,12 +95,11 @@ def normalize_post_key(value: str) -> str:
     raw = str(value or "").strip()
     if not raw:
         return ""
-
-    parsed = urlparse(raw if "://" in raw else f"https://www.instagram.com{raw if raw.startswith('/') else '/' + raw}")
-    parts = [part for part in parsed.path.split("/") if part]
+    candidate = raw if "://" in raw else f"https://www.instagram.com{raw if raw.startswith('/') else '/' + raw}"
+    parts = [part for part in urlparse(candidate).path.split("/") if part]
     if len(parts) >= 2 and parts[0] in {"p", "reel", "tv"}:
         return f"/{parts[0]}/{parts[1]}/"
-    return raw
+    return ""
 
 
 def format_delay(seconds: int) -> str:
@@ -108,6 +107,4 @@ def format_delay(seconds: int) -> str:
     if seconds < 60:
         return f"{seconds}초"
     minutes, remainder = divmod(seconds, 60)
-    if remainder:
-        return f"{minutes}분 {remainder}초"
-    return f"{minutes}분"
+    return f"{minutes}분 {remainder}초" if remainder else f"{minutes}분"

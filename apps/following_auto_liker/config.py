@@ -27,36 +27,29 @@ class AppConfig:
     unchanged_scroll_rounds: int = 4
 
     def validate(self) -> AppConfig:
-        if not 1 <= int(self.check_interval_minutes) <= 1440:
-            raise ValueError("확인 간격은 1~1440분 사이여야 합니다.")
-        if not 0 <= int(self.min_delay_seconds) <= 3600:
-            raise ValueError("최소 대기 시간은 0~3600초 사이여야 합니다.")
-        if not 0 <= int(self.max_delay_seconds) <= 3600:
-            raise ValueError("최대 대기 시간은 0~3600초 사이여야 합니다.")
-        if int(self.min_delay_seconds) > int(self.max_delay_seconds):
+        values = {
+            "check_interval_minutes": (1, 1440, "확인 간격"),
+            "min_delay_seconds": (0, 3600, "최소 대기 시간"),
+            "max_delay_seconds": (0, 3600, "최대 대기 시간"),
+            "max_likes_per_cycle": (0, 10000, "회차당 최대 좋아요"),
+            "max_scroll_rounds": (1, 1000, "최대 스크롤 횟수"),
+            "unchanged_scroll_rounds": (1, 20, "종료 판단 횟수"),
+        }
+        for name, (low, high, label) in values.items():
+            value = int(getattr(self, name))
+            if not low <= value <= high:
+                raise ValueError(f"{label}은(는) {low}~{high} 사이여야 합니다.")
+            setattr(self, name, value)
+        if self.min_delay_seconds > self.max_delay_seconds:
             raise ValueError("최소 대기 시간은 최대 대기 시간보다 클 수 없습니다.")
-        if not 0 <= int(self.max_likes_per_cycle) <= 10_000:
-            raise ValueError("한 번에 처리할 최대 좋아요 수는 0~10000 사이여야 합니다. 0은 제한 없음입니다.")
-        if not 1 <= int(self.max_scroll_rounds) <= 1000:
-            raise ValueError("최대 스크롤 횟수는 1~1000 사이여야 합니다.")
-        if not 1 <= int(self.unchanged_scroll_rounds) <= 20:
-            raise ValueError("종료 판단 횟수는 1~20 사이여야 합니다.")
-
-        self.check_interval_minutes = int(self.check_interval_minutes)
-        self.min_delay_seconds = int(self.min_delay_seconds)
-        self.max_delay_seconds = int(self.max_delay_seconds)
-        self.max_likes_per_cycle = int(self.max_likes_per_cycle)
-        self.max_scroll_rounds = int(self.max_scroll_rounds)
-        self.unchanged_scroll_rounds = int(self.unchanged_scroll_rounds)
         return self
 
     @classmethod
     def from_mapping(cls, data: dict[str, Any] | None) -> AppConfig:
         data = data or {}
-        allowed = {field.name for field in cls.__dataclass_fields__.values()}
-        filtered = {key: value for key, value in data.items() if key in allowed}
+        allowed = set(cls.__dataclass_fields__)
         try:
-            return cls(**filtered).validate()
+            return cls(**{key: value for key, value in data.items() if key in allowed}).validate()
         except (TypeError, ValueError):
             return cls().validate()
 
@@ -78,7 +71,6 @@ class Storage:
         else:
             base = Path(os.environ.get("XDG_DATA_HOME", home / ".local" / "share"))
             root = base / "following-auto-liker"
-
         return cls(
             StoragePaths(
                 root=root,
@@ -97,26 +89,19 @@ class Storage:
 
     def save_config(self, config: AppConfig) -> None:
         config.validate()
-        self._atomic_write_json(self.paths.config, asdict(config))
+        self.paths.config.parent.mkdir(parents=True, exist_ok=True)
+        temp = self.paths.config.with_suffix(".tmp")
+        temp.write_text(json.dumps(asdict(config), ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(temp, self.paths.config)
 
-    def clear_browser_profile(self) -> None:
+    def reset_chrome_profile(self) -> None:
         if self.paths.chrome_profile.exists():
             shutil.rmtree(self.paths.chrome_profile)
         self.paths.chrome_profile.mkdir(parents=True, exist_ok=True)
 
-    def browser_profile_has_data(self) -> bool:
+    def chrome_profile_has_data(self) -> bool:
         try:
             next(self.paths.chrome_profile.iterdir())
         except (StopIteration, FileNotFoundError, OSError):
             return False
         return True
-
-    @staticmethod
-    def _atomic_write_json(path: Path, data: dict[str, Any]) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_suffix(path.suffix + ".tmp")
-        temporary.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True),
-            encoding="utf-8",
-        )
-        os.replace(temporary, path)

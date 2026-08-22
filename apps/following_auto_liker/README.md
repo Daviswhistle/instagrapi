@@ -60,6 +60,8 @@ python -m apps.following_auto_liker.app
 python -m unittest -v tests.regression.test_following_auto_liker
 ```
 
+회귀 테스트 10개가 기본 3~5초 간격, 필터링, 중복 제거, 무제한 처리, 선택적 회차 한도, 제한 감지, 중지 동작과 로컬 저장을 검증합니다.
+
 로컬 패키징:
 
 ```bash

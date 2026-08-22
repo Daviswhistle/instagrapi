@@ -6,6 +6,8 @@ on:
     paths:
       - ".github/workflows/apply-pr1-cleanup.yml"
       - ".cleanup-pr1/**"
+  pull_request:
+    types: [ready_for_review]
 
 permissions:
   contents: write

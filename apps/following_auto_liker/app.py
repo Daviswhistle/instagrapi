@@ -88,10 +88,18 @@ class AutoLikerApp(Tk):
         settings = ttk.LabelFrame(container, text="설정", padding=12)
         settings.pack(fill="x")
         self._setting_row(settings, 0, "피드 확인 간격", self.interval_var, "분", "끝까지 확인한 뒤 다시 시작할 간격")
-        self._setting_row(settings, 1, "좋아요 전 최소 대기", self.min_delay_var, "초", "각 좋아요 사이 무작위 대기의 하한")
-        self._setting_row(settings, 2, "좋아요 전 최대 대기", self.max_delay_var, "초", "각 좋아요 사이 무작위 대기의 상한")
-        self._setting_row(settings, 3, "회차당 최대 좋아요", self.max_likes_var, "개", "0이면 발견한 미좋아요 글을 모두 처리")
-        self._setting_row(settings, 4, "최대 피드 화면 수", self.max_scroll_var, "회", "피드가 끝나지 않을 때의 처리 상한")
+        self._setting_row(
+            settings, 1, "좋아요 전 최소 대기", self.min_delay_var, "초", "각 좋아요 사이 무작위 대기의 하한"
+        )
+        self._setting_row(
+            settings, 2, "좋아요 전 최대 대기", self.max_delay_var, "초", "각 좋아요 사이 무작위 대기의 상한"
+        )
+        self._setting_row(
+            settings, 3, "회차당 최대 좋아요", self.max_likes_var, "개", "0이면 발견한 미좋아요 글을 모두 처리"
+        )
+        self._setting_row(
+            settings, 4, "최대 피드 화면 수", self.max_scroll_var, "회", "피드가 끝나지 않을 때의 처리 상한"
+        )
         settings.columnconfigure(3, weight=1)
 
         actions = ttk.Frame(container)
@@ -107,7 +115,9 @@ class AutoLikerApp(Tk):
         status = ttk.LabelFrame(container, text="현재 상태", padding=12)
         status.pack(fill="x")
         ttk.Label(status, text="상태").grid(row=0, column=0, sticky="w")
-        ttk.Label(status, textvariable=self.status_var, font=("", 10, "bold")).grid(row=0, column=1, sticky="w", padx=(14, 0))
+        ttk.Label(status, textvariable=self.status_var, font=("", 10, "bold")).grid(
+            row=0, column=1, sticky="w", padx=(14, 0)
+        )
         ttk.Label(status, text="이번 실행 좋아요").grid(row=1, column=0, sticky="w", pady=(6, 0))
         ttk.Label(status, textvariable=self.likes_var).grid(row=1, column=1, sticky="w", padx=(14, 0), pady=(6, 0))
         ttk.Label(status, text="마지막 확인").grid(row=2, column=0, sticky="w", pady=(6, 0))
@@ -174,7 +184,9 @@ class AutoLikerApp(Tk):
         self.status_var.set("Chrome을 여는 중")
         self._set_running_controls(True)
         self._append_log("자동 좋아요를 시작합니다.")
-        self.worker = threading.Thread(target=self._worker_main, args=(config,), daemon=False, name="following-auto-liker")
+        self.worker = threading.Thread(
+            target=self._worker_main, args=(config,), daemon=False, name="following-auto-liker"
+        )
         self.worker.start()
 
     def _worker_main(self, config: AppConfig) -> None:
@@ -191,7 +203,9 @@ class AutoLikerApp(Tk):
             self.events.put(("error", exc.user_message))
         except Exception as exc:
             self.logger.exception("Unexpected auto-liker failure")
-            self.events.put(("error", f"예상하지 못한 오류로 중지했습니다. app.log를 확인하세요. ({type(exc).__name__})"))
+            self.events.put(
+                ("error", f"예상하지 못한 오류로 중지했습니다. app.log를 확인하세요. ({type(exc).__name__})")
+            )
         finally:
             self.events.put(("stopped", None))
 
@@ -276,7 +290,9 @@ class AutoLikerApp(Tk):
         try:
             self.storage.reset_chrome_profile()
         except OSError as exc:
-            messagebox.showerror(APP_TITLE, f"Chrome 데이터를 지우지 못했습니다. 열린 전용 Chrome 창을 닫고 다시 시도하세요.\n{exc}")
+            messagebox.showerror(
+                APP_TITLE, f"Chrome 데이터를 지우지 못했습니다. 열린 전용 Chrome 창을 닫고 다시 시도하세요.\n{exc}"
+            )
             return
         self._append_log("전용 Chrome 로그인 데이터를 지웠습니다.")
 

@@ -94,13 +94,16 @@ class FollowingAutoLikerRegressionTest(unittest.TestCase):
         one = FakePost("/p/one/")
         two = FakePost("/reel/two/")
         feed = FakeFeed(
-            [[
-                one,
-                FakePost("/p/liked/", state="liked"),
-                FakePost("/p/ad/", reason="sponsored"),
-                FakePost("/p/recommended/", reason="recommended"),
-                FakePost("/p/unknown/", state="unknown"),
-            ], [two]],
+            [
+                [
+                    one,
+                    FakePost("/p/liked/", state="liked"),
+                    FakePost("/p/ad/", reason="sponsored"),
+                    FakePost("/p/recommended/", reason="recommended"),
+                    FakePost("/p/unknown/", state="unknown"),
+                ],
+                [two],
+            ],
             caught_up_at=1,
         )
         summary = self.scanner().scan_once(feed)

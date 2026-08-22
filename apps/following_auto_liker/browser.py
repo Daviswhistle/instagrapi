@@ -121,9 +121,14 @@ class ChromeSession:
         except Exception as exc:
             self.close()
             detail = str(exc).lower()
-            if any(term in detail for term in ("executable doesn't exist", "channel 'chrome'", "could not find chrome")):
+            if any(
+                term in detail for term in ("executable doesn't exist", "channel 'chrome'", "could not find chrome")
+            ):
                 raise ChromeLaunchError("Google Chrome을 찾지 못했습니다. Chrome을 설치한 뒤 다시 시작하세요.") from exc
-            if any(term in detail for term in ("processsingleton", "profile is in use", "user data directory is already in use")):
+            if any(
+                term in detail
+                for term in ("processsingleton", "profile is in use", "user data directory is already in use")
+            ):
                 raise ChromeLaunchError(
                     "자동 좋아요 전용 Chrome 프로필이 이미 사용 중입니다. 열린 전용 Chrome 창을 모두 닫고 다시 시작하세요."
                 ) from exc
@@ -208,7 +213,9 @@ class ChromeSession:
     @staticmethod
     def _raise_browser_error(exc: Exception) -> None:
         detail = str(exc).lower()
-        if any(term in detail for term in ("target page", "browser has been closed", "target closed", "context closed")):
+        if any(
+            term in detail for term in ("target page", "browser has been closed", "target closed", "context closed")
+        ):
             raise BrowserClosedError("Chrome 창이 닫혔습니다. 다시 시작하세요.") from exc
         raise exc
 

@@ -9,6 +9,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from apps.following_auto_liker.browser import (
+    ChromeBrowserSession,
     PlaywrightFeedPost,
     PlaywrightFollowingFeed,
     is_instagram_hostname,
@@ -292,6 +293,32 @@ class FollowingAutoLikerRegressionTestCase(unittest.TestCase):
             self.config(max_likes_per_cycle=-1)
 
 
+class _InterruptedNavigationPage:
+    def __init__(self):
+        self.load_states = []
+
+    def goto(self, _url, *, wait_until):
+        self.wait_until = wait_until
+        raise RuntimeError(
+            'Navigation to "https://www.instagram.com/?variant=following" '
+            'is interrupted by another navigation to "https://www.instagram.com/accounts/onetap/"'
+        )
+
+    def wait_for_load_state(self, state, *, timeout):
+        self.load_states.append((state, timeout))
+
+
+class BrowserNavigationRegressionTestCase(unittest.TestCase):
+    def test_interrupted_instagram_redirect_is_allowed_to_settle(self):
+        page = _InterruptedNavigationPage()
+        session = ChromeBrowserSession(Path("/tmp/following-auto-liker-test-profile"))
+
+        session._safe_goto(page, "https://www.instagram.com/?variant=following")
+
+        self.assertEqual(page.wait_until, "domcontentloaded")
+        self.assertEqual(page.load_states, [("domcontentloaded", 20_000)])
+
+
 class _PageWithUrl:
     def __init__(self, page, url: str):
         self._page = page
@@ -307,6 +334,12 @@ class _DomSession:
 
     def _require_page(self):
         return self.page
+
+    @staticmethod
+    def _page_looks_logged_out(page):
+        if any(path in page.url for path in ("/accounts/login", "/accounts/onetap")):
+            return True
+        return page.locator('input[name="username"]').count() > 0
 
     @staticmethod
     def raise_browser_error(exc):
@@ -408,6 +441,14 @@ class BrowserDomRegressionTestCase(unittest.TestCase):
         )
         self.assertTrue(feed._has_legitimate_empty_state())
         feed._wait_until_following_surface(timeout_seconds=0)
+
+    def test_onetap_route_is_treated_as_logged_out(self):
+        session = _DomSession(_PageWithUrl(self.page, "https://www.instagram.com/accounts/onetap/"))
+        feed = PlaywrightFollowingFeed(session)
+
+        self.page.set_content("<main><p>Continue with Instagram</p></main>")
+
+        self.assertTrue(feed._looks_logged_out())
 
     def test_common_dialogs_are_dismissed_in_every_supported_locale(self):
         feed = PlaywrightFollowingFeed(self.session)

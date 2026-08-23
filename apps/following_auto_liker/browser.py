@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 
 INSTAGRAM_HOME_URL = "https://www.instagram.com/"
 FOLLOWING_FEED_URL = "https://www.instagram.com/?variant=following"
+NAVIGATION_TIMEOUT_MS = 20_000
 
 LIKE_LABELS = (
     "Like",
@@ -371,6 +372,7 @@ class ChromeBrowserSession:
                 headless=False,
                 no_viewport=True,
                 accept_downloads=False,
+                chromium_sandbox=True,
                 args=["--start-maximized"],
             )
         except Exception as exc:
@@ -382,7 +384,7 @@ class ChromeBrowserSession:
         self.page.set_default_timeout(5_000)
         # A shorter navigation ceiling makes app shutdown responsive while still
         # allowing normal Instagram loads on a typical connection.
-        self.page.set_default_navigation_timeout(20_000)
+        self.page.set_default_navigation_timeout(NAVIGATION_TIMEOUT_MS)
         self.on_log("자동 좋아요 전용 Chrome 창을 열었습니다.")
 
     def wait_until_logged_in(self, stop_event: threading.Event) -> None:
@@ -439,7 +441,7 @@ class ChromeBrowserSession:
 
     def _page_looks_logged_out(self, page: Page) -> bool:
         try:
-            if "/accounts/login" in page.url:
+            if any(path in page.url for path in ("/accounts/login", "/accounts/onetap")):
                 return True
             return page.locator('input[name="username"]').count() > 0
         except Exception as exc:
@@ -470,6 +472,16 @@ class ChromeBrowserSession:
         try:
             page.goto(url, wait_until="domcontentloaded")
         except Exception as exc:
+            # Instagram can redirect through /accounts/onetap while the target
+            # navigation is still settling. Playwright reports that expected
+            # redirect as an interrupted navigation; callers validate the final
+            # URL and page state immediately after this method returns.
+            if "interrupted by another navigation" in str(exc).lower():
+                try:
+                    page.wait_for_load_state("domcontentloaded", timeout=NAVIGATION_TIMEOUT_MS)
+                except Exception as settle_exc:
+                    self.raise_browser_error(settle_exc)
+                return
             self.raise_browser_error(exc)
 
     @staticmethod
@@ -734,13 +746,7 @@ class PlaywrightFollowingFeed:
         )
 
     def _looks_logged_out(self) -> bool:
-        page = self.page
-        try:
-            if "/accounts/login" in page.url:
-                return True
-            return page.locator('input[name="username"]').count() > 0
-        except Exception as exc:
-            self.session.raise_browser_error(exc)
+        return self.session._page_looks_logged_out(self.page)
 
     def _dismiss_common_dialogs(self) -> None:
         """Dismiss only safe secondary actions, including supported localized labels."""

@@ -1,0 +1,140 @@
+name: Non-Follower Cleaner
+
+on:
+  workflow_dispatch: {}
+  pull_request:
+    paths:
+      - "apps/non_follower_cleaner/**"
+      - "apps/following_auto_liker/browser.py"
+      - "apps/following_auto_liker/engine.py"
+      - "apps/following_auto_liker/storage.py"
+      - "apps/following_auto_liker/requirements.txt"
+      - "tests/regression/test_non_follower_cleaner.py"
+      - ".github/workflows/non-follower-cleaner.yml"
+  push:
+    branches: ["master"]
+    tags: ["non-follower-cleaner-v*"]
+    paths:
+      - "apps/non_follower_cleaner/**"
+      - "apps/following_auto_liker/browser.py"
+      - "apps/following_auto_liker/engine.py"
+      - "apps/following_auto_liker/storage.py"
+      - "apps/following_auto_liker/requirements.txt"
+      - "tests/regression/test_non_follower_cleaner.py"
+      - ".github/workflows/non-follower-cleaner.yml"
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.13.5"
+  RUFF_VERSION: "0.16.2"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install . "ruff==${RUFF_VERSION}"
+          python -m pip install -r apps/following_auto_liker/requirements.txt
+      - name: Lint and format check
+        run: |
+          ruff check apps/non_follower_cleaner tests/regression/test_non_follower_cleaner.py
+          ruff format --check apps/non_follower_cleaner tests/regression/test_non_follower_cleaner.py
+      - name: Compile and import smoke test
+        run: |
+          python -m compileall -q apps/non_follower_cleaner tests/regression/test_non_follower_cleaner.py
+          python - <<'PY'
+          from apps.non_follower_cleaner.browser import PlaywrightFriendshipBackend
+          from apps.non_follower_cleaner.engine import NonFollowerCleaner
+
+          assert PlaywrightFriendshipBackend
+          assert NonFollowerCleaner
+          PY
+      - name: Run cleaner tests
+        run: python -m unittest -v tests.regression.test_non_follower_cleaner
+
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact_name: NonFollowerCleaner-Windows
+          - os: macos-15
+            artifact_name: NonFollowerCleaner-macOS-Apple-Silicon
+          - os: macos-15-intel
+            artifact_name: NonFollowerCleaner-macOS-Intel
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install . pyinstaller
+          python -m pip install -r apps/following_auto_liker/requirements.txt
+      - name: Verify Playwright driver package
+        shell: bash
+        run: |
+          python - <<'PY'
+          from playwright.sync_api import sync_playwright
+
+          with sync_playwright() as playwright:
+              assert playwright.chromium
+          PY
+      - name: Build desktop application
+        run: >-
+          pyinstaller --noconfirm --clean --windowed --onedir
+          --name NonFollowerCleaner --paths .
+          --collect-all playwright --copy-metadata playwright
+          apps/non_follower_cleaner/app.py
+      - name: Package Windows application
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path dist/NonFollowerCleaner -DestinationPath "${{ matrix.artifact_name }}.zip"
+      - name: Package macOS application
+        if: runner.os == 'macOS'
+        run: ditto -c -k --sequesterRsrc --keepParent dist/NonFollowerCleaner.app "${{ matrix.artifact_name }}.zip"
+      - name: Upload packaged application
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_name }}.zip
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/non-follower-cleaner-v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v7
+        with:
+          path: release-artifacts
+      - name: Collect release files
+        run: |
+          mkdir release-files
+          find release-artifacts -type f -name '*.zip' -exec cp '{}' release-files/ \;
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "${GITHUB_REF_NAME}" release-files/*.zip
+          --repo "${GITHUB_REPOSITORY}" --generate-notes
+          --title "Non-Follower Cleaner ${GITHUB_REF_NAME}"

@@ -121,9 +121,7 @@ class NonJsonUnfollowResponseTestCase(unittest.TestCase):
             PlaywrightFriendshipBackend(session).unfollow("2")
 
     def test_plain_text_restriction_still_stops_the_run(self) -> None:
-        session = FakeSession(
-            response(text="Please wait a few minutes before you try again.")
-        )
+        session = FakeSession(response(text="Please wait a few minutes before you try again."))
 
         with self.assertRaises(NonFollowerCleanerError):
             PlaywrightFriendshipBackend(session).unfollow("2")

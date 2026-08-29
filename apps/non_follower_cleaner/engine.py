@@ -355,15 +355,15 @@ class NonFollowerCleaner:
 
             if not next_cursor:
                 break
-            if not raw_users:
-                raise IncompleteFriendshipListError(
-                    f"Instagram {self._list_label(list_name)} 응답이 빈 페이지에서 다음 커서를 보냈습니다. "
-                    "목록 누락 가능성이 있어 중지했습니다."
-                )
             if next_cursor == cursor or next_cursor in seen_cursors:
                 raise IncompleteFriendshipListError(
                     f"Instagram {self._list_label(list_name)} 페이지 커서가 반복되었습니다. "
                     "목록 전체를 확인하지 못해 중지했습니다."
+                )
+            if not raw_users:
+                self.on_log(
+                    f"Instagram {self._list_label(list_name)} 목록에서 빈 중간 페이지를 받았습니다. "
+                    "다음 커서로 계속 확인합니다."
                 )
             seen_cursors.add(next_cursor)
             if self.wait_fn(stop_event, self.config.page_delay_seconds):

@@ -10,9 +10,9 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 from apps.following_auto_liker.browser import INSTAGRAM_HOME_URL
-from apps.non_follower_cleaner.engine import FriendshipRequestError, NonFollowerCleanerError
 from apps.instagram_tools.browser import SharedChromeBrowserSession, VerifiedFriendshipBackend
 from apps.instagram_tools.worker import InstagramAutomationWorker
+from apps.non_follower_cleaner.engine import FriendshipRequestError, NonFollowerCleanerError
 
 DESTROY_URL = "https://www.instagram.com/api/v1/friendships/destroy/2/"
 SHOW_URL = "https://www.instagram.com/api/v1/friendships/show/2/"

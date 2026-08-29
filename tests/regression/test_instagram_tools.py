@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import queue
+import runpy
 import threading
 import time
 import unittest
@@ -12,7 +13,11 @@ from unittest.mock import Mock
 from apps.following_auto_liker.browser import INSTAGRAM_HOME_URL
 from apps.instagram_tools.browser import SharedChromeBrowserSession, VerifiedFriendshipBackend
 from apps.instagram_tools.worker import InstagramAutomationWorker
-from apps.non_follower_cleaner.engine import FriendshipRequestError, NonFollowerCleanerError
+from apps.non_follower_cleaner.engine import (
+    FriendshipRequestError,
+    NonFollowerCleanerError,
+    OperationStopped,
+)
 
 DESTROY_URL = "https://www.instagram.com/api/v1/friendships/destroy/2/"
 SHOW_URL = "https://www.instagram.com/api/v1/friendships/show/2/"
@@ -89,6 +94,68 @@ class VerifiedUnfollowRegressionTestCase(unittest.TestCase):
         self.assertEqual(backend.unfollow("2"), payload)
         self.assertEqual(len(session.page.evaluate_calls), 1)
         self.assertEqual(session.page.wait_calls, [])
+
+    def test_top_level_unfollow_confirmation_is_normalized_for_the_cleaner(self) -> None:
+        payload = {"status": "ok", "following": False}
+        backend, session = self.backend(
+            [response(DESTROY_URL, text=json.dumps(payload), content_type="application/json")]
+        )
+
+        result = backend.unfollow("2")
+
+        self.assertIs(result["following"], False)
+        self.assertIs(result["friendship_status"]["following"], False)
+        self.assertEqual(len(session.page.evaluate_calls), 1)
+
+    def test_stop_during_ambiguous_write_finishes_current_state_check(self) -> None:
+        stop_event = threading.Event()
+        backend, session = self.backend(
+            [
+                response(DESTROY_URL),
+                response(SHOW_URL, text='{"status":"ok","following":false}', content_type="application/json"),
+            ]
+        )
+        backend.stop_event = stop_event
+        original_evaluate = session.page.evaluate
+
+        def evaluate(script: str, arguments: dict[str, object]) -> dict[str, object]:
+            result = original_evaluate(script, arguments)
+            if arguments["method"] == "POST":
+                stop_event.set()
+            return result
+
+        session.page.evaluate = evaluate
+        result = backend.unfollow("2")
+
+        self.assertTrue(stop_event.is_set())
+        self.assertIs(result["friendship_status"]["following"], False)
+        methods = [arguments["method"] for _script, arguments in session.page.evaluate_calls]
+        self.assertEqual(methods, ["POST", "GET"])
+
+    def test_stop_after_unchanged_write_does_not_start_fallback(self) -> None:
+        stop_event = threading.Event()
+        backend, session = self.backend(
+            [
+                response(DESTROY_URL),
+                response(SHOW_URL, text='{"status":"ok","following":true}', content_type="application/json"),
+            ]
+        )
+        backend.stop_event = stop_event
+        original_evaluate = session.page.evaluate
+
+        def evaluate(script: str, arguments: dict[str, object]) -> dict[str, object]:
+            result = original_evaluate(script, arguments)
+            if arguments["method"] == "POST":
+                stop_event.set()
+            return result
+
+        session.page.evaluate = evaluate
+
+        with self.assertRaises(OperationStopped):
+            backend.unfollow("2")
+
+        methods = [arguments["method"] for _script, arguments in session.page.evaluate_calls]
+        self.assertEqual(methods, ["POST", "GET"])
 
     def test_ambiguous_2xx_is_accepted_only_after_post_write_state_check(self) -> None:
         backend, session = self.backend(
@@ -174,6 +241,16 @@ class VerifiedUnfollowRegressionTestCase(unittest.TestCase):
         self.assertEqual(len(session.page.evaluate_calls), 1)
 
 
+class PackagedEntryRegressionTestCase(unittest.TestCase):
+    def test_app_script_imports_without_package_context(self) -> None:
+        repository_root = Path(__file__).resolve().parents[2]
+        namespace = runpy.run_path(
+            str(repository_root / "apps/instagram_tools/app.py"),
+            run_name="instagram_tools_entry_import_test",
+        )
+        self.assertIn("main", namespace)
+
+
 class SharedBrowserRegressionTestCase(unittest.TestCase):
     def test_logged_in_instagram_page_is_reused_without_home_reload(self) -> None:
         page = SimpleNamespace(url="https://www.instagram.com/?variant=following")
@@ -189,6 +266,18 @@ class SharedBrowserRegressionTestCase(unittest.TestCase):
 
     def test_non_instagram_start_page_navigates_home_once(self) -> None:
         page = SimpleNamespace(url="about:blank")
+        session = SharedChromeBrowserSession(Path("/tmp/instagram-tools-profile"))
+        session._require_page = Mock(return_value=page)
+        session._has_session_cookie = Mock(return_value=True)
+        session._page_looks_logged_out = Mock(return_value=False)
+        session._safe_goto = Mock()
+
+        session.wait_until_logged_in(threading.Event())
+
+        session._safe_goto.assert_called_once_with(page, INSTAGRAM_HOME_URL)
+
+    def test_other_instagram_subdomain_navigates_to_web_home_once(self) -> None:
+        page = SimpleNamespace(url="https://help.instagram.com/123456")
         session = SharedChromeBrowserSession(Path("/tmp/instagram-tools-profile"))
         session._require_page = Mock(return_value=page)
         session._has_session_cookie = Mock(return_value=True)

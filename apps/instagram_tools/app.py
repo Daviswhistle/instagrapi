@@ -14,14 +14,13 @@ from pathlib import Path
 from tkinter import END, LEFT, RIGHT, StringVar, Text, Tk, messagebox, ttk
 
 from apps.following_auto_liker.storage import AppAlreadyRunningError, AppConfig, Storage
+from apps.instagram_tools.worker import InstagramAutomationWorker
 from apps.non_follower_cleaner.engine import (
     CleanerConfig,
     FriendshipAccount,
     ScanResult,
     UnfollowSummary,
 )
-
-from .worker import InstagramAutomationWorker
 
 APP_TITLE = "Instagram 도구"
 

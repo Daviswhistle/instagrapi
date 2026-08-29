@@ -7,11 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlencode, urlparse
 
-from apps.following_auto_liker.browser import (
-    INSTAGRAM_HOME_URL,
-    ChromeBrowserSession,
-    is_instagram_hostname,
-)
+from apps.following_auto_liker.browser import INSTAGRAM_HOME_URL, ChromeBrowserSession
 from apps.following_auto_liker.engine import LoginRequiredError
 from apps.non_follower_cleaner.engine import (
     FriendshipList,
@@ -24,6 +20,7 @@ WEB_APP_ID = "936619743392459"
 WEB_ASBD_ID = "129477"
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 20.0
 POST_CONFIRMATION_DELAY_MS = 350
+INSTAGRAM_WEB_HOST = urlparse(INSTAGRAM_HOME_URL).hostname or "www.instagram.com"
 
 _RESTRICTION_MARKERS = (
     "feedback_required",
@@ -106,6 +103,10 @@ class BrowserResponse:
             return None
 
 
+def is_instagram_web_host(hostname: str | None) -> bool:
+    return str(hostname or "").casefold().rstrip(".") == INSTAGRAM_WEB_HOST.casefold()
+
+
 class SharedChromeBrowserSession(ChromeBrowserSession):
     """Keep one Chrome context alive and avoid navigating to Home twice."""
 
@@ -124,14 +125,14 @@ class SharedChromeBrowserSession(ChromeBrowserSession):
 
         # A persistent context often already has an authenticated Instagram page.
         # Reusing it avoids the visible blank-page -> Home -> Home reload sequence.
-        if not is_instagram_hostname(current_host):
+        if not is_instagram_web_host(current_host):
             self._safe_goto(page, INSTAGRAM_HOME_URL)
 
         if self._has_session_cookie() and not self._page_looks_logged_out(page):
             self.on_log("전용 Chrome에 저장된 Instagram 로그인을 사용합니다.")
             return
 
-        if not is_instagram_hostname(urlparse(page.url).hostname):
+        if not is_instagram_web_host(urlparse(page.url).hostname):
             self._safe_goto(page, INSTAGRAM_HOME_URL)
 
         self.on_log(
@@ -166,7 +167,7 @@ class VerifiedFriendshipBackend:
 
     def prepare(self) -> None:
         page = self.session._require_page(create_if_missing=True)
-        if not is_instagram_hostname(urlparse(page.url).hostname):
+        if not is_instagram_web_host(urlparse(page.url).hostname):
             self.session._safe_goto(page, INSTAGRAM_HOME_URL)
         try:
             page.wait_for_timeout(250)
@@ -203,7 +204,7 @@ class VerifiedFriendshipBackend:
         path = f"/api/v1/friendships/{viewer_id}/{list_name}/?{urlencode(query)}"
         return self._request_json(path, method="GET", include_ig_headers=True)
 
-    def friendship(self, user_id: str) -> dict[str, Any]:
+    def friendship(self, user_id: str, *, honor_stop: bool = True) -> dict[str, Any]:
         query = urlencode(
             {
                 "is_external_deeplink_profile_view": "false",
@@ -214,6 +215,7 @@ class VerifiedFriendshipBackend:
             f"/api/v1/friendships/show/{user_id}/?{query}",
             method="GET",
             include_ig_headers=True,
+            honor_stop=honor_stop,
         )
 
     def unfollow(self, user_id: str) -> dict[str, Any]:
@@ -252,15 +254,16 @@ class VerifiedFriendshipBackend:
                     message = self._payload_message(payload) or "명시적 실패"
                     diagnostics.append(f"시도 {attempt_number}: {message}")
                     continue
-                if self._payload_confirms_unfollow(payload):
-                    return payload
+                confirmation = self._normalize_unfollow_confirmation(payload)
+                if confirmation is not None:
+                    return confirmation
 
             # A 2xx status alone is not proof of a write. Instagram can return a
             # generic HTML/empty response while leaving the relationship intact.
             # Verify only the account just written; this is a post-condition check,
             # not a pre-check or another full follower/following scan.
             self._wait_after_write()
-            relationship = self.friendship(user_id)
+            relationship = self.friendship(user_id, honor_stop=False)
             following = relationship.get("following")
             if following is False:
                 return {
@@ -291,12 +294,14 @@ class VerifiedFriendshipBackend:
         method: str,
         csrf_token: str = "",
         include_ig_headers: bool,
+        honor_stop: bool = True,
     ) -> dict[str, Any]:
         response = self._request(
             path,
             method=method,
             csrf_token=csrf_token,
             include_ig_headers=include_ig_headers,
+            honor_stop=honor_stop,
         )
         self._require_expected_final_url(response, path)
         if not response.ok:
@@ -323,8 +328,10 @@ class VerifiedFriendshipBackend:
         method: str,
         csrf_token: str = "",
         include_ig_headers: bool,
+        honor_stop: bool = True,
     ) -> BrowserResponse:
-        self._raise_if_stopped()
+        if honor_stop:
+            self._raise_if_stopped()
         page = self.session._require_page()
         try:
             result = page.evaluate(
@@ -342,7 +349,7 @@ class VerifiedFriendshipBackend:
         except Exception as exc:
             self.session.raise_browser_error(exc)
 
-        if method.upper() != "POST":
+        if method.upper() != "POST" and honor_stop:
             self._raise_if_stopped()
         if not isinstance(result, dict):
             raise FriendshipRequestError("Instagram 요청 결과를 읽지 못했습니다.")
@@ -406,7 +413,7 @@ class VerifiedFriendshipBackend:
         if (
             not response.url
             or response.redirected
-            or not is_instagram_hostname(parsed.hostname)
+            or not is_instagram_web_host(parsed.hostname)
             or actual_path != expected_path
         ):
             raise FriendshipRequestError(
@@ -416,11 +423,18 @@ class VerifiedFriendshipBackend:
             )
 
     @staticmethod
-    def _payload_confirms_unfollow(payload: dict[str, Any]) -> bool:
+    def _normalize_unfollow_confirmation(payload: dict[str, Any]) -> dict[str, Any] | None:
         friendship_status = payload.get("friendship_status")
         if isinstance(friendship_status, dict) and friendship_status.get("following") is False:
-            return True
-        return payload.get("following") is False
+            return payload
+        if payload.get("following") is not False:
+            return None
+
+        normalized = dict(payload)
+        normalized_status = dict(friendship_status) if isinstance(friendship_status, dict) else {}
+        normalized_status["following"] = False
+        normalized["friendship_status"] = normalized_status
+        return normalized
 
     @staticmethod
     def _payload_message(payload: dict[str, Any]) -> str:

@@ -276,7 +276,7 @@ class PlaywrightFriendshipBackend:
             )
 
         is_unfollow_post = accept_non_json_success and method.upper() == "POST"
-        if is_unfollow_post:
+        if is_unfollow_post and response_url:
             final_path_matches = response_path.rstrip("/") == expected_path.rstrip("/")
             trusted_final_url = (
                 not redirected and response_host in {"instagram.com", "www.instagram.com"} and final_path_matches
@@ -299,6 +299,11 @@ class PlaywrightFriendshipBackend:
             )
 
         if is_unfollow_post:
+            if not response_url:
+                raise FriendshipRequestError(
+                    "Instagram 언팔로우 응답의 최종 URL을 확인하지 못해 완료로 기록하지 않았습니다."
+                )
+
             # Instagram's unfollow endpoint can return a successful 2xx response
             # with an empty, plain-text, or HTML body. Once the response remains
             # on the exact destroy endpoint, the HTTP status is the write

@@ -75,13 +75,13 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            artifact_name: NonFollowerCleaner-Windows
+            artifact_name: nfc-platform-Windows
             package_name: NonFollowerCleaner-Windows.zip
           - os: macos-15
-            artifact_name: NonFollowerCleaner-macOS-Apple-Silicon
+            artifact_name: nfc-platform-macOS-Apple-Silicon
             package_name: NonFollowerCleaner-macOS-Apple-Silicon.dmg
           - os: macos-15-intel
-            artifact_name: NonFollowerCleaner-macOS-Intel
+            artifact_name: nfc-platform-macOS-Intel
             package_name: NonFollowerCleaner-macOS-Intel.dmg
     runs-on: ${{ matrix.os }}
     steps:
@@ -131,31 +131,46 @@ jobs:
             -format UDZO \
             "${{ matrix.package_name }}"
           hdiutil verify "${{ matrix.package_name }}"
-      - name: Upload packaged application
+      - name: Upload temporary platform package
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact_name }}
           path: ${{ matrix.package_name }}
           compression-level: 0
+          overwrite: true
           if-no-files-found: error
+
+  bundle:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Merge all platform packages into one download
+        uses: actions/upload-artifact/merge@v4
+        with:
+          name: NonFollowerCleaner-All-Platforms
+          pattern: nfc-platform-*
+          delete-merged: true
+          compression-level: 0
 
   release:
     if: startsWith(github.ref, 'refs/tags/non-follower-cleaner-v')
-    needs: build
+    needs: bundle
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Download build artifacts
+      - name: Download combined package artifact
         uses: actions/download-artifact@v7
         with:
-          path: release-artifacts
-      - name: Collect release files
+          name: NonFollowerCleaner-All-Platforms
+          path: release-files
+      - name: Verify release files
         shell: bash
         run: |
           set -euo pipefail
-          mkdir release-files
-          find release-artifacts -type f \( -name '*.zip' -o -name '*.dmg' \) -exec cp '{}' release-files/ \;
+          test -f release-files/NonFollowerCleaner-Windows.zip
+          test -f release-files/NonFollowerCleaner-macOS-Apple-Silicon.dmg
+          test -f release-files/NonFollowerCleaner-macOS-Intel.dmg
           test "$(find release-files -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq 3
       - name: Create GitHub Release
         env:

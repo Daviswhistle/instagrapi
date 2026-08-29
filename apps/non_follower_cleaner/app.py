@@ -211,9 +211,14 @@ class CleanerApp(Tk):
     def _start_unfollow(self) -> None:
         if self.running:
             return
-        selected = tuple(self.tree.selection())
-        if not selected:
+        selected_ids = tuple(self.tree.selection())
+        if not selected_ids:
             messagebox.showinfo(APP_TITLE, "언팔로우할 계정을 먼저 선택해 주세요.")
+            return
+        selected = tuple(self.candidates[user_id] for user_id in selected_ids if user_id in self.candidates)
+        if len(selected) != len(selected_ids):
+            self._invalidate_results(counts_message="목록을 다시 확인해 주세요")
+            messagebox.showinfo(APP_TITLE, "선택 목록이 바뀌었습니다. 목록을 다시 확인해 주세요.")
             return
         expected_viewer_id = self.scanned_viewer_id
         if not expected_viewer_id:
@@ -232,7 +237,8 @@ class CleanerApp(Tk):
         confirmed = messagebox.askyesno(
             APP_TITLE,
             f"선택한 {len(selected):,}개 중 {limit_text}를 언팔로우할까요?\n\n"
-            "실행 직전에 관계를 다시 확인하며, 그때 나를 팔로우하는 계정은 제외합니다.\n"
+            "선택한 계정만 바로 처리하며 전체 목록이나 개별 관계를 다시 조회하지 않습니다.\n"
+            "로그인 계정이 목록을 확인한 계정과 같은지만 확인합니다.\n"
             "이 작업은 Instagram에서 즉시 반영됩니다.",
         )
         if not confirmed:
@@ -243,7 +249,7 @@ class CleanerApp(Tk):
         self,
         operation: str,
         config: CleanerConfig,
-        selected: tuple[str, ...],
+        selected: tuple[FriendshipAccount, ...],
         expected_viewer_id: str = "",
     ) -> None:
         # Relationship data becomes stale as soon as a new scan or write run
@@ -267,7 +273,7 @@ class CleanerApp(Tk):
         self,
         operation: str,
         config: CleanerConfig,
-        selected: tuple[str, ...],
+        selected: tuple[FriendshipAccount, ...],
         expected_viewer_id: str,
     ) -> None:
         browser = ChromeBrowserSession(
@@ -400,7 +406,6 @@ class CleanerApp(Tk):
         self._append_log(
             f"언팔로우 종료: 선택 {summary.selected:,}개 · 실행 대상 {summary.eligible:,}개 · "
             f"완료 {succeeded:,}개 · 실패 {len(summary.failed):,}개 · "
-            f"관계 변경 제외 {summary.skipped_relationship_changed:,}개 · "
             f"회차 한도 이월 {summary.deferred_by_limit:,}개"
         )
         if summary.failed:

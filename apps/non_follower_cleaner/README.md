@@ -44,13 +44,15 @@ HTTP 성공 상태를 사용합니다. 로그인·체크포인트 페이지로 �
 
 저장소의 Releases 또는 GitHub Actions 산출물에서 운영체제에 맞는 패키지를 받습니다.
 
+GitHub Actions 실행 화면에는 `NonFollowerCleaner-All-Platforms` 산출물 **하나만** 표시됩니다.
+이를 한 번 내려받아 압축을 풀면 다음 세 설치 파일이 같은 폴더에 들어 있습니다.
+
 - Windows: `NonFollowerCleaner-Windows.zip`
 - Apple Silicon Mac: `NonFollowerCleaner-macOS-Apple-Silicon.dmg`
 - Intel Mac: `NonFollowerCleaner-macOS-Intel.dmg`
 
-GitHub Actions의 산출물은 GitHub가 한 번 더 ZIP으로 감싸서 제공합니다. Actions에서 받은 ZIP은
-한 번만 풀면 Windows에서는 앱 ZIP, macOS에서는 DMG가 나옵니다. Mac에서는 DMG를 열고
-`NonFollowerCleaner.app`을 `Applications`로 옮긴 뒤 실행합니다. Releases에서는 DMG를 직접 받을 수 있습니다.
+Mac에서는 해당 DMG를 열고 `NonFollowerCleaner.app`을 `Applications`로 옮긴 뒤 실행합니다.
+GitHub Releases에서는 위 세 파일을 각각 직접 받을 수 있습니다.
 
 현재 macOS 앱은 Developer ID 서명과 Apple 공증을 하지 않은 빌드입니다. 첫 실행이 차단되면
 다음 순서로 본인이 받은 파일임을 확인한 뒤 예외를 허용합니다.
@@ -109,11 +111,12 @@ pyinstaller --noconfirm --clean --windowed --onedir \
 ## 배포 빌드
 
 `.github/workflows/non-follower-cleaner.yml`은 Windows ZIP과 Apple Silicon/Intel macOS DMG를 만듭니다.
-macOS 빌드는 `hdiutil verify`까지 통과해야 산출물로 업로드됩니다.
+macOS 빌드는 `hdiutil verify`까지 통과해야 합니다. 세 플랫폼 빌드가 모두 성공하면 임시 플랫폼별
+산출물을 `NonFollowerCleaner-All-Platforms` 하나로 합치고, 임시 산출물은 삭제합니다.
 
-- Pull request와 `master` 반영 시: 테스트 후 Actions 산출물 생성
+- Pull request와 `master` 반영 시: 테스트 후 세 운영체제 패키지를 담은 Actions 산출물 하나 생성
 - 수동 실행: Actions의 `Non-Follower Cleaner`에서 `Run workflow`
-- `non-follower-cleaner-v*` 태그 푸시 시: 세 운영체제 패키지를 GitHub Release로 게시
+- `non-follower-cleaner-v*` 태그 푸시 시: 합쳐진 산출물에서 세 운영체제 패키지를 꺼내 GitHub Release로 게시
 
 ## 중요한 위험
 

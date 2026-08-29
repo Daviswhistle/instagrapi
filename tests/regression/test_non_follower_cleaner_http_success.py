@@ -120,6 +120,76 @@ class NonJsonUnfollowResponseTestCase(unittest.TestCase):
         with self.assertRaises(LoginRequiredError):
             PlaywrightFriendshipBackend(session).unfollow("2")
 
+    def test_other_redirects_are_not_synthesized_as_success(self) -> None:
+        cases = (
+            (
+                True,
+                "https://www.instagram.com/consent/",
+                "<html><body>landing page</body></html>",
+                "text/html",
+                "generic redirect",
+            ),
+            (
+                True,
+                "https://www.instagram.com/api/v1/friendships/destroy/2/",
+                "<html><body>landing page</body></html>",
+                "text/html",
+                "redirected flag on expected path",
+            ),
+            (
+                False,
+                "https://www.instagram.com/something-else/",
+                "<html><body>landing page</body></html>",
+                "text/html",
+                "unexpected final path",
+            ),
+            (
+                True,
+                "https://www.instagram.com/consent/",
+                '{"status":"ok","friendship_status":{"following":false}}',
+                "application/json",
+                "JSON success after redirect",
+            ),
+        )
+        for redirected, url, text, content_type, label in cases:
+            with self.subTest(label=label):
+                session = FakeSession(
+                    response(
+                        text=text,
+                        content_type=content_type,
+                        redirected=redirected,
+                        url=url,
+                    )
+                )
+
+                with self.assertRaises(FriendshipRequestError) as cm:
+                    PlaywrightFriendshipBackend(session).unfollow("2")
+
+                self.assertIn("예상한 엔드포인트", str(cm.exception))
+
+    def test_non_dictionary_json_error_markers_still_stop_the_run(self) -> None:
+        cases = (
+            ('"login_required"', LoginRequiredError),
+            ('"feedback_required"', NonFollowerCleanerError),
+            ('["challenge_required"]', NonFollowerCleanerError),
+        )
+        for text, error_type in cases:
+            with self.subTest(text=text):
+                session = FakeSession(response(text=text, content_type="application/json"))
+
+                with self.assertRaises(error_type):
+                    PlaywrightFriendshipBackend(session).unfollow("2")
+
+    def test_other_non_dictionary_json_is_rejected(self) -> None:
+        for text in ("[1, 2]", "null", "123"):
+            with self.subTest(text=text):
+                session = FakeSession(response(text=text, content_type="application/json"))
+
+                with self.assertRaises(FriendshipRequestError) as cm:
+                    PlaywrightFriendshipBackend(session).unfollow("2")
+
+                self.assertIn("JSON 형식이 예상과 다릅니다", str(cm.exception))
+
     def test_plain_text_restriction_still_stops_the_run(self) -> None:
         session = FakeSession(response(text="Please wait a few minutes before you try again."))
 

@@ -70,10 +70,13 @@ jobs:
         include:
           - os: windows-latest
             artifact_name: NonFollowerCleaner-Windows
+            package_name: NonFollowerCleaner-Windows.zip
           - os: macos-15
             artifact_name: NonFollowerCleaner-macOS-Apple-Silicon
+            package_name: NonFollowerCleaner-macOS-Apple-Silicon.dmg
           - os: macos-15-intel
             artifact_name: NonFollowerCleaner-macOS-Intel
+            package_name: NonFollowerCleaner-macOS-Intel.dmg
     runs-on: ${{ matrix.os }}
     steps:
       - name: Check out code
@@ -105,15 +108,29 @@ jobs:
       - name: Package Windows application
         if: runner.os == 'Windows'
         shell: pwsh
-        run: Compress-Archive -Path dist/NonFollowerCleaner -DestinationPath "${{ matrix.artifact_name }}.zip"
-      - name: Package macOS application
+        run: Compress-Archive -Path dist/NonFollowerCleaner -DestinationPath "${{ matrix.package_name }}"
+      - name: Package macOS disk image
         if: runner.os == 'macOS'
-        run: ditto -c -k --sequesterRsrc --keepParent dist/NonFollowerCleaner.app "${{ matrix.artifact_name }}.zip"
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf package
+          mkdir -p package
+          ditto dist/NonFollowerCleaner.app package/NonFollowerCleaner.app
+          ln -s /Applications package/Applications
+          hdiutil create \
+            -volname "NonFollowerCleaner" \
+            -srcfolder package \
+            -ov \
+            -format UDZO \
+            "${{ matrix.package_name }}"
+          hdiutil verify "${{ matrix.package_name }}"
       - name: Upload packaged application
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact_name }}
-          path: ${{ matrix.artifact_name }}.zip
+          path: ${{ matrix.package_name }}
+          compression-level: 0
           if-no-files-found: error
 
   release:
@@ -128,13 +145,16 @@ jobs:
         with:
           path: release-artifacts
       - name: Collect release files
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir release-files
-          find release-artifacts -type f -name '*.zip' -exec cp '{}' release-files/ \;
+          find release-artifacts -type f \( -name '*.zip' -o -name '*.dmg' \) -exec cp '{}' release-files/ \;
+          test "$(find release-files -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq 3
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
-          gh release create "${GITHUB_REF_NAME}" release-files/*.zip
+          gh release create "${GITHUB_REF_NAME}" release-files/*
           --repo "${GITHUB_REPOSITORY}" --generate-notes
           --title "Non-Follower Cleaner ${GITHUB_REF_NAME}"

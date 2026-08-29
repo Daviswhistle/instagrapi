@@ -259,66 +259,71 @@ class NonFollowerCleanerEngineTestCase(unittest.TestCase):
                     NonFollowerCleaner(backend).scan()
                 self.assertEqual(backend.unfollow_calls, [])
 
-    def test_unfollow_rechecks_each_target_immediately_before_action(self):
-        backend = FakeBackend(
-            {
-                ("following", ""): {
-                    "users": [user("2", "two"), user("3", "three")],
-                    "next_max_id": None,
-                },
-                ("followers", ""): {"users": [], "next_max_id": None},
-            }
-        )
-        backend.friendship_results["3"] = {
+    def test_unfollow_uses_reviewed_selection_without_any_relationship_reads(self):
+        backend = FakeBackend({})
+        backend.friendship_results["2"] = {
             "status": "ok",
             "followed_by": True,
             "following": True,
         }
+        logs: list[str] = []
+        cleaner = NonFollowerCleaner(
+            backend,
+            CleanerConfig(min_delay_seconds=0, max_delay_seconds=0),
+            on_log=logs.append,
+        )
+        selected = [
+            FriendshipAccount(pk="2", username="two"),
+            FriendshipAccount(pk="3", username="three"),
+        ]
+
+        summary = cleaner.unfollow_selected(selected, "1")
+
+        self.assertEqual(backend.fetch_calls, [])
+        self.assertEqual(backend.friendship_calls, [])
+        self.assertEqual(backend.unfollow_calls, ["2", "3"])
+        self.assertEqual([account.username for account in summary.succeeded], ["two", "three"])
+        self.assertTrue(any("개별 관계는 다시 조회하지 않습니다" in message for message in logs))
+
+    def test_unfollow_deduplicates_reviewed_accounts_and_preserves_order(self):
+        backend = FakeBackend({})
         cleaner = NonFollowerCleaner(
             backend,
             CleanerConfig(min_delay_seconds=0, max_delay_seconds=0),
         )
+        two = FriendshipAccount(pk="2", username="two")
+        three = FriendshipAccount(pk="3", username="three")
 
-        summary = cleaner.unfollow_selected(["2", "3"], "1")
+        summary = cleaner.unfollow_selected([two, three, two], "1")
 
-        self.assertEqual(backend.friendship_calls, ["2", "3"])
+        self.assertEqual(summary.selected, 2)
+        self.assertEqual(summary.eligible, 2)
+        self.assertEqual(backend.unfollow_calls, ["2", "3"])
+
+    def test_unfollow_applies_per_run_limit_to_reviewed_selection(self):
+        backend = FakeBackend({})
+        cleaner = NonFollowerCleaner(
+            backend,
+            CleanerConfig(
+                min_delay_seconds=0,
+                max_delay_seconds=0,
+                max_unfollows_per_run=1,
+            ),
+        )
+        selected = [
+            FriendshipAccount(pk="2", username="two"),
+            FriendshipAccount(pk="3", username="three"),
+            FriendshipAccount(pk="4", username="four"),
+        ]
+
+        summary = cleaner.unfollow_selected(selected, "1")
+
+        self.assertEqual(summary.eligible, 1)
+        self.assertEqual(summary.deferred_by_limit, 2)
         self.assertEqual(backend.unfollow_calls, ["2"])
-        self.assertEqual(summary.skipped_relationship_changed, 1)
-        self.assertEqual([account.pk for account in summary.succeeded], ["2"])
 
-    def test_unfollow_skips_target_that_is_no_longer_followed(self):
-        backend = FakeBackend(
-            {
-                ("following", ""): {"users": [user("2", "two")], "next_max_id": None},
-                ("followers", ""): {"users": [], "next_max_id": None},
-            }
-        )
-        backend.friendship_results["2"] = {
-            "status": "ok",
-            "followed_by": False,
-            "following": False,
-        }
-        cleaner = NonFollowerCleaner(
-            backend,
-            CleanerConfig(min_delay_seconds=0, max_delay_seconds=0),
-        )
-
-        summary = cleaner.unfollow_selected(["2"], "1")
-
-        self.assertEqual(backend.friendship_calls, ["2"])
-        self.assertEqual(backend.unfollow_calls, [])
-        self.assertEqual(summary.skipped_relationship_changed, 1)
-
-    def test_unfollow_rescans_and_skips_relationships_that_changed(self):
-        backend = FakeBackend(
-            {
-                ("following", ""): {
-                    "users": [user("2", "two"), user("3", "three"), user("4", "four")],
-                    "next_max_id": None,
-                },
-                ("followers", ""): {"users": [user("3", "three")], "next_max_id": None},
-            }
-        )
+    def test_unfollow_uses_configured_delay_without_reading_relationships(self):
+        backend = FakeBackend({})
         waits: list[float] = []
         cleaner = NonFollowerCleaner(
             backend,
@@ -326,84 +331,34 @@ class NonFollowerCleanerEngineTestCase(unittest.TestCase):
             rng=SequenceRandom([3, 5]),
             wait_fn=lambda _stop, seconds: waits.append(seconds) or False,
         )
+        selected = [
+            FriendshipAccount(pk="2", username="two"),
+            FriendshipAccount(pk="3", username="three"),
+        ]
 
-        summary = cleaner.unfollow_selected(["2", "3", "4"], "1")
+        cleaner.unfollow_selected(selected, "1")
 
-        self.assertEqual(summary.selected, 3)
-        self.assertEqual(summary.eligible, 2)
-        self.assertEqual(summary.skipped_relationship_changed, 1)
-        self.assertEqual([account.pk for account in summary.succeeded], ["2", "4"])
-        self.assertEqual(backend.unfollow_calls, ["2", "4"])
         self.assertEqual(waits, [3, 5])
-
-    def test_unfollow_applies_per_run_limit_after_fresh_relationship_check(self):
-        backend = FakeBackend(
-            {
-                ("following", ""): {"users": [user("2"), user("3")], "next_max_id": None},
-                ("followers", ""): {"users": [], "next_max_id": None},
-            }
-        )
-        cleaner = NonFollowerCleaner(
-            backend,
-            CleanerConfig(
-                min_delay_seconds=0,
-                max_delay_seconds=0,
-                max_unfollows_per_run=1,
-            ),
-        )
-
-        summary = cleaner.unfollow_selected(["2", "3"], "1")
-
-        self.assertEqual(summary.eligible, 1)
-        self.assertEqual(summary.deferred_by_limit, 1)
-        self.assertEqual(backend.unfollow_calls, ["2"])
-
-    def test_action_limit_counts_actual_unfollow_attempts_not_changed_relationships(self):
-        backend = FakeBackend(
-            {
-                ("following", ""): {
-                    "users": [user("2"), user("3"), user("4")],
-                    "next_max_id": None,
-                },
-                ("followers", ""): {"users": [], "next_max_id": None},
-            }
-        )
-        backend.friendship_results["2"] = {
-            "status": "ok",
-            "followed_by": True,
-            "following": True,
-        }
-        cleaner = NonFollowerCleaner(
-            backend,
-            CleanerConfig(
-                min_delay_seconds=0,
-                max_delay_seconds=0,
-                max_unfollows_per_run=1,
-            ),
-        )
-
-        summary = cleaner.unfollow_selected(["2", "3", "4"], "1")
-
-        self.assertEqual(backend.friendship_calls, ["2", "3"])
-        self.assertEqual(backend.unfollow_calls, ["3"])
-        self.assertEqual(summary.skipped_relationship_changed, 1)
-        self.assertEqual(summary.deferred_by_limit, 1)
+        self.assertEqual(backend.friendship_calls, [])
+        self.assertEqual(backend.unfollow_calls, ["2", "3"])
 
     def test_unfollow_stops_when_completion_is_not_explicitly_confirmed(self):
-        backend = FakeBackend(
-            {
-                ("following", ""): {"users": [user("2"), user("3")], "next_max_id": None},
-                ("followers", ""): {"users": [], "next_max_id": None},
-            }
-        )
-        backend.unfollow_results["2"] = {"status": "ok", "friendship_status": {"following": True}}
+        backend = FakeBackend({})
+        backend.unfollow_results["2"] = {
+            "status": "ok",
+            "friendship_status": {"following": True},
+        }
         cleaner = NonFollowerCleaner(
             backend,
             CleanerConfig(min_delay_seconds=0, max_delay_seconds=0),
         )
+        selected = [
+            FriendshipAccount(pk="2", username="two"),
+            FriendshipAccount(pk="3", username="three"),
+        ]
 
         with self.assertRaises(UnfollowRunError) as cm:
-            cleaner.unfollow_selected(["2", "3"], "1")
+            cleaner.unfollow_selected(selected, "1")
 
         self.assertEqual(backend.unfollow_calls, ["2"])
         self.assertEqual(cm.exception.summary.attempted, 1)
@@ -411,54 +366,41 @@ class NonFollowerCleanerEngineTestCase(unittest.TestCase):
         self.assertEqual(cm.exception.summary.succeeded, [])
 
     def test_unfollow_stops_on_restriction_and_preserves_completed_accounts(self):
-        backend = FakeBackend(
-            {
-                ("following", ""): {"users": [user("2"), user("3")], "next_max_id": None},
-                ("followers", ""): {"users": [], "next_max_id": None},
-            }
-        )
+        backend = FakeBackend({})
         backend.unfollow_results["3"] = NonFollowerCleanerError("활동 제한")
         cleaner = NonFollowerCleaner(
             backend,
             CleanerConfig(min_delay_seconds=0, max_delay_seconds=0),
         )
+        selected = [
+            FriendshipAccount(pk="2", username="two"),
+            FriendshipAccount(pk="3", username="three"),
+        ]
 
         with self.assertRaises(UnfollowRunError) as cm:
-            cleaner.unfollow_selected(["2", "3"], "1")
+            cleaner.unfollow_selected(selected, "1")
 
         self.assertEqual([account.pk for account in cm.exception.summary.succeeded], ["2"])
         self.assertEqual(cm.exception.summary.attempted, 2)
         self.assertEqual(backend.unfollow_calls, ["2", "3"])
 
     def test_stop_event_interrupts_action_delay_before_write(self):
-        backend = FakeBackend(
-            {
-                ("following", ""): {"users": [user("2")], "next_max_id": None},
-                ("followers", ""): {"users": [], "next_max_id": None},
-            }
-        )
+        backend = FakeBackend({})
         cleaner = NonFollowerCleaner(
             backend,
             CleanerConfig(min_delay_seconds=3, max_delay_seconds=3),
             wait_fn=lambda _stop, _seconds: True,
         )
+        selected = [FriendshipAccount(pk="2", username="two")]
 
-        summary = cleaner.unfollow_selected(["2"], "1", threading.Event())
+        summary = cleaner.unfollow_selected(selected, "1", threading.Event())
 
         self.assertTrue(summary.stopped)
         self.assertEqual(summary.attempted, 0)
         self.assertEqual(backend.unfollow_calls, [])
 
     def test_completed_unfollow_is_recorded_before_stop_takes_effect(self):
-        backend = FakeBackend(
-            {
-                ("following", ""): {
-                    "users": [user("2"), user("3")],
-                    "next_max_id": None,
-                },
-                ("followers", ""): {"users": [], "next_max_id": None},
-            }
-        )
+        backend = FakeBackend({})
         stop_event = threading.Event()
         original_unfollow = backend.unfollow
 
@@ -472,8 +414,12 @@ class NonFollowerCleanerEngineTestCase(unittest.TestCase):
             backend,
             CleanerConfig(min_delay_seconds=0, max_delay_seconds=0),
         )
+        selected = [
+            FriendshipAccount(pk="2", username="two"),
+            FriendshipAccount(pk="3", username="three"),
+        ]
 
-        summary = cleaner.unfollow_selected(["2", "3"], "1", stop_event)
+        summary = cleaner.unfollow_selected(selected, "1", stop_event)
 
         self.assertTrue(summary.stopped)
         self.assertEqual(summary.attempted, 1)
@@ -481,23 +427,28 @@ class NonFollowerCleanerEngineTestCase(unittest.TestCase):
         self.assertEqual(backend.unfollow_calls, ["2"])
 
     def test_unfollow_rejects_a_different_logged_in_account_before_requests(self):
-        backend = FakeBackend(
-            {
-                ("following", ""): {"users": [user("2")], "next_max_id": None},
-                ("followers", ""): {"users": [], "next_max_id": None},
-            }
-        )
+        backend = FakeBackend({})
         backend.current_viewer_id = "999"
         cleaner = NonFollowerCleaner(
             backend,
             CleanerConfig(min_delay_seconds=0, max_delay_seconds=0),
         )
+        selected = [FriendshipAccount(pk="2", username="two")]
 
         with self.assertRaises(ViewerAccountChangedError):
-            cleaner.unfollow_selected(["2"], "1")
+            cleaner.unfollow_selected(selected, "1")
 
         self.assertEqual(backend.fetch_calls, [])
         self.assertEqual(backend.friendship_calls, [])
+        self.assertEqual(backend.unfollow_calls, [])
+
+    def test_unfollow_requires_accounts_from_the_reviewed_scan(self):
+        backend = FakeBackend({})
+        cleaner = NonFollowerCleaner(backend)
+
+        with self.assertRaises(TypeError):
+            cleaner.unfollow_selected(["2"], "1")  # type: ignore[list-item]
+
         self.assertEqual(backend.unfollow_calls, [])
 
     def test_config_validation_rejects_unsafe_or_invalid_ranges(self):
@@ -509,14 +460,6 @@ class NonFollowerCleanerEngineTestCase(unittest.TestCase):
             CleanerConfig(max_unfollows_per_run=-1).validate()
         with self.assertRaises(ValueError):
             CleanerConfig(page_size=0).validate()
-
-    def test_relationship_status_requires_both_explicit_booleans(self):
-        self.assertEqual(
-            NonFollowerCleaner._require_relationship_status({"status": "ok", "followed_by": False, "following": True}),
-            (False, True),
-        )
-        with self.assertRaises(FriendshipRequestError):
-            NonFollowerCleaner._require_relationship_status({"status": "ok", "followed_by": False})
 
     def test_unfollow_confirmation_requires_following_false(self):
         with self.assertRaises(FriendshipRequestError):

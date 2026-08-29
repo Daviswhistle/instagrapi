@@ -124,7 +124,6 @@ class ScanResult:
 class UnfollowSummary:
     selected: int = 0
     eligible: int = 0
-    skipped_relationship_changed: int = 0
     deferred_by_limit: int = 0
     attempted: int = 0
     succeeded: list[FriendshipAccount] = field(default_factory=list)
@@ -133,7 +132,7 @@ class UnfollowSummary:
 
 
 class NonFollowerCleaner:
-    """Compare complete relationship snapshots before issuing any unfollow action."""
+    """Build a complete scan, then apply the user-reviewed selection directly."""
 
     def __init__(
         self,
@@ -185,30 +184,21 @@ class NonFollowerCleaner:
 
     def unfollow_selected(
         self,
-        selected_user_ids: Sequence[str],
+        selected_accounts: Sequence[FriendshipAccount],
         expected_viewer_id: str,
         stop_event: threading.Event | None = None,
     ) -> UnfollowSummary:
-        normalized_ids = (str(user_id).strip() for user_id in selected_user_ids)
-        selected = tuple(dict.fromkeys(user_id for user_id in normalized_ids if user_id))
-        summary = UnfollowSummary(selected=len(selected))
-        if not selected:
+        targets = self._normalize_selected_accounts(selected_accounts)
+        summary = UnfollowSummary(selected=len(targets))
+        if not targets:
             return summary
 
         expected_viewer_id = str(expected_viewer_id).strip()
         self._require_same_viewer(expected_viewer_id, self.backend.viewer_id())
 
-        self.on_log(
-            "실행 직전 팔로워·팔로잉 목록을 다시 확인합니다. 그 사이 나를 팔로우하기 시작한 계정은 자동으로 제외합니다."
-        )
-        fresh_scan = self.scan(stop_event)
-        self._require_same_viewer(expected_viewer_id, fresh_scan.viewer_id)
-        fresh_candidates = {account.pk: account for account in fresh_scan.non_followers}
-        targets = [fresh_candidates[user_id] for user_id in selected if user_id in fresh_candidates]
-        summary.skipped_relationship_changed = len(selected) - len(targets)
-
         action_limit = self.config.max_unfollows_per_run
         summary.eligible = min(len(targets), action_limit) if action_limit else len(targets)
+        self.on_log("선택한 계정만 처리합니다. 팔로워·팔로잉 전체 목록과 개별 관계는 다시 조회하지 않습니다.")
 
         for index, account in enumerate(targets):
             if action_limit and summary.attempted >= action_limit:
@@ -217,8 +207,6 @@ class NonFollowerCleaner:
             if stop_event and stop_event.is_set():
                 summary.stopped = True
                 break
-
-            self._ensure_run_viewer(expected_viewer_id, summary)
 
             delay_seconds = int(
                 self.rng.randint(
@@ -233,21 +221,9 @@ class NonFollowerCleaner:
                 break
 
             try:
-                self._require_same_viewer(expected_viewer_id, self.backend.viewer_id())
-                relationship = self.backend.friendship(account.pk)
-                followed_by, following = self._require_relationship_status(relationship)
-                if followed_by:
-                    summary.skipped_relationship_changed += 1
-                    self.on_log(f"@{account.username} 계정이 현재 나를 팔로우하므로 제외했습니다.")
-                    continue
-                if not following:
-                    summary.skipped_relationship_changed += 1
-                    self.on_log(f"@{account.username} 계정은 이미 팔로우 중이 아니므로 제외했습니다.")
-                    continue
-                if stop_event and stop_event.is_set():
-                    summary.stopped = True
-                    break
-
+                # This cookie-only identity check prevents the reviewed selection
+                # from being applied to a different Instagram account. It does not
+                # re-fetch followers, following, or per-target relationship state.
                 self._require_same_viewer(expected_viewer_id, self.backend.viewer_id())
                 summary.attempted += 1
                 payload = self.backend.unfollow(account.pk)
@@ -260,7 +236,7 @@ class NonFollowerCleaner:
             except NonFollowerCleanerError as exc:
                 summary.failed.append((account, exc.user_message))
                 raise UnfollowRunError(
-                    "Instagram 응답을 확실히 확인하지 못해 추가 언팔로우를 중지했습니다. "
+                    "Instagram 언팔로우 응답을 확실히 확인하지 못해 추가 작업을 중지했습니다. "
                     f"마지막 대상: @{account.username}. {exc.user_message}",
                     summary=summary,
                 ) from exc
@@ -289,11 +265,24 @@ class NonFollowerCleaner:
 
         return summary
 
-    def _ensure_run_viewer(self, expected_viewer_id: str, summary: UnfollowSummary) -> None:
-        try:
-            self._require_same_viewer(expected_viewer_id, self.backend.viewer_id())
-        except ViewerAccountChangedError as exc:
-            raise UnfollowRunError(exc.user_message, summary=summary) from exc
+    @staticmethod
+    def _normalize_selected_accounts(
+        selected_accounts: Sequence[FriendshipAccount],
+    ) -> tuple[FriendshipAccount, ...]:
+        normalized: list[FriendshipAccount] = []
+        seen_ids: set[str] = set()
+        for account in selected_accounts:
+            if not isinstance(account, FriendshipAccount):
+                raise TypeError("언팔로우 대상은 목록 확인 결과의 계정 객체여야 합니다.")
+            user_id = str(account.pk).strip()
+            username = str(account.username).strip()
+            if not user_id or not username:
+                raise FriendshipRequestError("선택한 계정의 식별값이 없어 언팔로우하지 않았습니다.")
+            if user_id in seen_ids:
+                continue
+            seen_ids.add(user_id)
+            normalized.append(account)
+        return tuple(normalized)
 
     def _collect(
         self,
@@ -405,17 +394,6 @@ class NonFollowerCleaner:
             raise FriendshipRequestError(
                 f"Instagram {NonFollowerCleaner._list_label(list_name)} 요청이 실패했습니다: {message}"
             )
-
-    @staticmethod
-    def _require_relationship_status(payload: dict[str, Any]) -> tuple[bool, bool]:
-        if not isinstance(payload, dict):
-            raise FriendshipRequestError("관계 확인 응답이 JSON 객체가 아닙니다.")
-        followed_by = payload.get("followed_by")
-        following = payload.get("following")
-        if isinstance(followed_by, bool) and isinstance(following, bool):
-            return followed_by, following
-        message = str(payload.get("message") or payload.get("error_title") or "상태 확인 불가")
-        raise FriendshipRequestError(f"Instagram이 현재 상호 팔로우 상태를 명확히 알려주지 않았습니다: {message}")
 
     @staticmethod
     def _require_unfollow_confirmation(payload: dict[str, Any]) -> None:

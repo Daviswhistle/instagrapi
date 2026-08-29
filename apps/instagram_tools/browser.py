@@ -281,8 +281,7 @@ class VerifiedFriendshipBackend:
 
         detail = " · ".join(diagnostics) or "응답 내용 없음"
         raise FriendshipRequestError(
-            "Instagram이 선택한 계정의 언팔로우를 실제로 반영하지 않았습니다. "
-            f"두 웹 엔드포인트를 시도한 결과: {detail}"
+            f"Instagram이 선택한 계정의 언팔로우를 실제로 반영하지 않았습니다. 두 웹 엔드포인트를 시도한 결과: {detail}"
         )
 
     def _request_json(

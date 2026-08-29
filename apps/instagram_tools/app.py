@@ -150,7 +150,9 @@ class InstagramToolsApp(Tk):
         self._setting_row(settings, 0, "피드 확인 간격", self.auto_interval_var, "분", self.auto_entries)
         self._setting_row(settings, 1, "좋아요 전 최소 대기", self.auto_min_delay_var, "초", self.auto_entries)
         self._setting_row(settings, 2, "좋아요 전 최대 대기", self.auto_max_delay_var, "초", self.auto_entries)
-        self._setting_row(settings, 3, "회차당 최대 좋아요", self.auto_max_likes_var, "개 · 0은 제한 없음", self.auto_entries)
+        self._setting_row(
+            settings, 3, "회차당 최대 좋아요", self.auto_max_likes_var, "개 · 0은 제한 없음", self.auto_entries
+        )
         self._setting_row(settings, 4, "최대 스크롤 횟수", self.auto_max_scroll_var, "회", self.auto_entries)
 
         actions = ttk.Frame(parent)
@@ -329,7 +331,9 @@ class InstagramToolsApp(Tk):
             messagebox.showerror(APP_TITLE, str(exc))
             return
 
-        limit_text = "선택한 계정 전부" if config.max_unfollows_per_run == 0 else f"최대 {config.max_unfollows_per_run:,}개"
+        limit_text = (
+            "선택한 계정 전부" if config.max_unfollows_per_run == 0 else f"최대 {config.max_unfollows_per_run:,}개"
+        )
         confirmed = messagebox.askyesno(
             APP_TITLE,
             f"선택한 {len(selected):,}개 중 {limit_text}를 언팔로우할까요?\n\n"
@@ -426,8 +430,7 @@ class InstagramToolsApp(Tk):
             self.cleaner_status_var.set(f"{label} 확인 중 · {int(progress.get('collected') or 0):,}개")
         elif phase == "unfollow":
             self.cleaner_status_var.set(
-                f"언팔로우 확인 완료 · {int(progress.get('succeeded') or 0):,}/"
-                f"{int(progress.get('eligible') or 0):,}개"
+                f"언팔로우 확인 완료 · {int(progress.get('succeeded') or 0):,}/{int(progress.get('eligible') or 0):,}개"
             )
 
     def _apply_scan_result(self, result: ScanResult) -> None:
@@ -485,9 +488,7 @@ class InstagramToolsApp(Tk):
         self.clear_selection_button.configure(state="disabled" if running else "normal")
         self.clear_browser_button.configure(state="disabled" if running else "normal")
         self.auto_stop_button.configure(state="normal" if self.running_kind == "auto_like" else "disabled")
-        self.cleaner_stop_button.configure(
-            state="normal" if self.running_kind in {"scan", "unfollow"} else "disabled"
-        )
+        self.cleaner_stop_button.configure(state="normal" if self.running_kind in {"scan", "unfollow"} else "disabled")
         can_unfollow = (
             not running and bool(self.scanned_viewer_id) and bool(self.candidates) and bool(self.tree.selection())
         )

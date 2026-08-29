@@ -35,13 +35,18 @@
 
 ## 가장 쉬운 사용법
 
-저장소의 Releases 또는 GitHub Actions 산출물에서 운영체제에 맞는 ZIP을 받습니다.
+저장소의 Releases 또는 GitHub Actions 산출물에서 운영체제에 맞는 패키지를 받습니다.
 
 - Windows: `NonFollowerCleaner-Windows.zip`
-- Apple Silicon Mac: `NonFollowerCleaner-macOS-Apple-Silicon.zip`
-- Intel Mac: `NonFollowerCleaner-macOS-Intel.zip`
+- Apple Silicon Mac: `NonFollowerCleaner-macOS-Apple-Silicon.dmg`
+- Intel Mac: `NonFollowerCleaner-macOS-Intel.dmg`
 
-ZIP을 풀고 앱을 실행한 뒤 **목록 확인**을 누릅니다. 첫 실행에 열린 Chrome에서 직접 로그인하면 이후에는 기존 로그인 상태를 재사용합니다.
+GitHub Actions의 산출물은 GitHub가 한 번 더 ZIP으로 감싸서 제공합니다. Actions에서 받은 ZIP은
+한 번만 풀면 Windows에서는 앱 ZIP, macOS에서는 DMG가 나옵니다. Mac에서는 DMG를 열고
+`NonFollowerCleaner.app`을 `Applications`로 옮긴 뒤 실행합니다. Releases에서는 DMG를 직접 받을 수 있습니다.
+
+첫 실행이 차단되면 Finder에서 앱을 Control-클릭한 뒤 **열기**를 선택합니다. 앱을 실행한 뒤
+**목록 확인**을 누르고, 첫 사용이면 열린 Chrome에서 직접 로그인합니다. 이후에는 기존 로그인 상태를 재사용합니다.
 
 ## 저장 데이터
 
@@ -86,7 +91,8 @@ pyinstaller --noconfirm --clean --windowed --onedir \
 
 ## 배포 빌드
 
-`.github/workflows/non-follower-cleaner.yml`은 Windows와 Apple Silicon/Intel macOS 패키지를 만듭니다.
+`.github/workflows/non-follower-cleaner.yml`은 Windows ZIP과 Apple Silicon/Intel macOS DMG를 만듭니다.
+macOS 빌드는 `hdiutil verify`까지 통과해야 산출물로 업로드됩니다.
 
 - Pull request와 `master` 반영 시: 테스트 후 Actions 산출물 생성
 - 수동 실행: Actions의 `Non-Follower Cleaner`에서 `Run workflow`

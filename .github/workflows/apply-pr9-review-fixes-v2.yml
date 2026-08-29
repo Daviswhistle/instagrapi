@@ -1,0 +1,316 @@
+name: Apply PR 9 Review Fixes v2
+
+on:
+  push:
+    branches: ["fix/unified-instagram-tools"]
+    paths:
+      - ".github/workflows/apply-pr9-review-fixes-v2.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out review branch
+        uses: actions/checkout@v7
+        with:
+          ref: fix/unified-instagram-tools
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13.5"
+      - name: Install formatter
+        run: python -m pip install "ruff==0.16.2"
+      - name: Apply review fixes and regression tests
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise RuntimeError(f"{label}: expected one match, found {count}")
+              return text.replace(old, new, 1)
+
+          app_path = Path("apps/instagram_tools/app.py")
+          app = app_path.read_text(encoding="utf-8")
+          app = replace_once(
+              app,
+              "from .worker import InstagramAutomationWorker",
+              "from apps.instagram_tools.worker import InstagramAutomationWorker",
+              "absolute packaged entry import",
+          )
+          app_path.write_text(app, encoding="utf-8")
+
+          browser_path = Path("apps/instagram_tools/browser.py")
+          browser = browser_path.read_text(encoding="utf-8")
+          browser = replace_once(
+              browser,
+              "from apps.following_auto_liker.browser import (\n"
+              "    INSTAGRAM_HOME_URL,\n"
+              "    ChromeBrowserSession,\n"
+              "    is_instagram_hostname,\n"
+              ")\n",
+              "from apps.following_auto_liker.browser import INSTAGRAM_HOME_URL, ChromeBrowserSession\n",
+              "remove broad Instagram hostname helper import",
+          )
+          browser = replace_once(
+              browser,
+              "POST_CONFIRMATION_DELAY_MS = 350\n",
+              "POST_CONFIRMATION_DELAY_MS = 350\n"
+              "INSTAGRAM_WEB_HOST = urlparse(INSTAGRAM_HOME_URL).hostname or \"www.instagram.com\"\n",
+              "web host constant",
+          )
+          browser = replace_once(
+              browser,
+              "\n\nclass SharedChromeBrowserSession(ChromeBrowserSession):\n",
+              "\n\ndef is_instagram_web_host(hostname: str | None) -> bool:\n"
+              "    return str(hostname or \"\").casefold().rstrip(\".\") == INSTAGRAM_WEB_HOST.casefold()\n"
+              "\n\nclass SharedChromeBrowserSession(ChromeBrowserSession):\n",
+              "exact Instagram web host helper",
+          )
+          broad_host_calls = browser.count("is_instagram_hostname(")
+          if broad_host_calls != 4:
+              raise RuntimeError(f"expected four broad hostname checks, found {broad_host_calls}")
+          browser = browser.replace("is_instagram_hostname(", "is_instagram_web_host(")
+
+          browser = replace_once(
+              browser,
+              "    def friendship(self, user_id: str) -> dict[str, Any]:\n",
+              "    def friendship(self, user_id: str, *, honor_stop: bool = True) -> dict[str, Any]:\n",
+              "friendship stop policy",
+          )
+          browser = replace_once(
+              browser,
+              "            method=\"GET\",\n"
+              "            include_ig_headers=True,\n"
+              "        )\n",
+              "            method=\"GET\",\n"
+              "            include_ig_headers=True,\n"
+              "            honor_stop=honor_stop,\n"
+              "        )\n",
+              "friendship request stop policy",
+          )
+          browser = replace_once(
+              browser,
+              "                if self._payload_confirms_unfollow(payload):\n"
+              "                    return payload\n",
+              "                confirmation = self._normalize_unfollow_confirmation(payload)\n"
+              "                if confirmation is not None:\n"
+              "                    return confirmation\n",
+              "normalize explicit unfollow confirmation",
+          )
+          browser = replace_once(
+              browser,
+              "            relationship = self.friendship(user_id)\n",
+              "            relationship = self.friendship(user_id, honor_stop=False)\n",
+              "finish in-flight write verification",
+          )
+          browser = replace_once(
+              browser,
+              "        csrf_token: str = \"\",\n"
+              "        include_ig_headers: bool,\n"
+              "    ) -> dict[str, Any]:\n",
+              "        csrf_token: str = \"\",\n"
+              "        include_ig_headers: bool,\n"
+              "        honor_stop: bool = True,\n"
+              "    ) -> dict[str, Any]:\n",
+              "JSON request stop policy parameter",
+          )
+          browser = replace_once(
+              browser,
+              "            csrf_token=csrf_token,\n"
+              "            include_ig_headers=include_ig_headers,\n"
+              "        )\n",
+              "            csrf_token=csrf_token,\n"
+              "            include_ig_headers=include_ig_headers,\n"
+              "            honor_stop=honor_stop,\n"
+              "        )\n",
+              "forward JSON request stop policy",
+          )
+          browser = replace_once(
+              browser,
+              "        csrf_token: str = \"\",\n"
+              "        include_ig_headers: bool,\n"
+              "    ) -> BrowserResponse:\n",
+              "        csrf_token: str = \"\",\n"
+              "        include_ig_headers: bool,\n"
+              "        honor_stop: bool = True,\n"
+              "    ) -> BrowserResponse:\n",
+              "browser request stop policy parameter",
+          )
+          browser = replace_once(
+              browser,
+              "        self._raise_if_stopped()\n"
+              "        page = self.session._require_page()\n",
+              "        if honor_stop:\n"
+              "            self._raise_if_stopped()\n"
+              "        page = self.session._require_page()\n",
+              "browser request preflight stop policy",
+          )
+          browser = replace_once(
+              browser,
+              "        if method.upper() != \"POST\":\n"
+              "            self._raise_if_stopped()\n",
+              "        if method.upper() != \"POST\" and honor_stop:\n"
+              "            self._raise_if_stopped()\n",
+              "browser request completion stop policy",
+          )
+          browser = replace_once(
+              browser,
+              "    @staticmethod\n"
+              "    def _payload_confirms_unfollow(payload: dict[str, Any]) -> bool:\n"
+              "        friendship_status = payload.get(\"friendship_status\")\n"
+              "        if isinstance(friendship_status, dict) and friendship_status.get(\"following\") is False:\n"
+              "            return True\n"
+              "        return payload.get(\"following\") is False\n",
+              "    @staticmethod\n"
+              "    def _normalize_unfollow_confirmation(payload: dict[str, Any]) -> dict[str, Any] | None:\n"
+              "        friendship_status = payload.get(\"friendship_status\")\n"
+              "        if isinstance(friendship_status, dict) and friendship_status.get(\"following\") is False:\n"
+              "            return payload\n"
+              "        if payload.get(\"following\") is not False:\n"
+              "            return None\n"
+              "\n"
+              "        normalized = dict(payload)\n"
+              "        normalized_status = dict(friendship_status) if isinstance(friendship_status, dict) else {}\n"
+              "        normalized_status[\"following\"] = False\n"
+              "        normalized[\"friendship_status\"] = normalized_status\n"
+              "        return normalized\n",
+              "normalize top-level unfollow payload",
+          )
+          browser_path.write_text(browser, encoding="utf-8")
+
+          tests_path = Path("tests/regression/test_instagram_tools.py")
+          tests = tests_path.read_text(encoding="utf-8")
+          tests = replace_once(tests, "import queue\n", "import queue\nimport runpy\n", "runpy test import")
+          tests = replace_once(
+              tests,
+              "from apps.non_follower_cleaner.engine import FriendshipRequestError, NonFollowerCleanerError\n",
+              "from apps.non_follower_cleaner.engine import (\n"
+              "    FriendshipRequestError,\n"
+              "    NonFollowerCleanerError,\n"
+              "    OperationStopped,\n"
+              ")\n",
+              "operation stopped test import",
+          )
+          tests = replace_once(
+              tests,
+              "    def test_ambiguous_2xx_is_accepted_only_after_post_write_state_check(self) -> None:\n",
+              "    def test_top_level_unfollow_confirmation_is_normalized_for_the_cleaner(self) -> None:\n"
+              "        payload = {\"status\": \"ok\", \"following\": False}\n"
+              "        backend, session = self.backend(\n"
+              "            [response(DESTROY_URL, text=json.dumps(payload), content_type=\"application/json\")]\n"
+              "        )\n"
+              "\n"
+              "        result = backend.unfollow(\"2\")\n"
+              "\n"
+              "        self.assertIs(result[\"following\"], False)\n"
+              "        self.assertIs(result[\"friendship_status\"][\"following\"], False)\n"
+              "        self.assertEqual(len(session.page.evaluate_calls), 1)\n"
+              "\n"
+              "    def test_stop_during_ambiguous_write_finishes_current_state_check(self) -> None:\n"
+              "        stop_event = threading.Event()\n"
+              "        backend, session = self.backend(\n"
+              "            [\n"
+              "                response(DESTROY_URL),\n"
+              "                response(SHOW_URL, text='{\"status\":\"ok\",\"following\":false}', content_type=\"application/json\"),\n"
+              "            ]\n"
+              "        )\n"
+              "        backend.stop_event = stop_event\n"
+              "        original_evaluate = session.page.evaluate\n"
+              "\n"
+              "        def evaluate(script: str, arguments: dict[str, object]) -> dict[str, object]:\n"
+              "            result = original_evaluate(script, arguments)\n"
+              "            if arguments[\"method\"] == \"POST\":\n"
+              "                stop_event.set()\n"
+              "            return result\n"
+              "\n"
+              "        session.page.evaluate = evaluate\n"
+              "        result = backend.unfollow(\"2\")\n"
+              "\n"
+              "        self.assertTrue(stop_event.is_set())\n"
+              "        self.assertIs(result[\"friendship_status\"][\"following\"], False)\n"
+              "        methods = [arguments[\"method\"] for _script, arguments in session.page.evaluate_calls]\n"
+              "        self.assertEqual(methods, [\"POST\", \"GET\"])\n"
+              "\n"
+              "    def test_stop_after_unchanged_write_does_not_start_fallback(self) -> None:\n"
+              "        stop_event = threading.Event()\n"
+              "        backend, session = self.backend(\n"
+              "            [\n"
+              "                response(DESTROY_URL),\n"
+              "                response(SHOW_URL, text='{\"status\":\"ok\",\"following\":true}', content_type=\"application/json\"),\n"
+              "            ]\n"
+              "        )\n"
+              "        backend.stop_event = stop_event\n"
+              "        original_evaluate = session.page.evaluate\n"
+              "\n"
+              "        def evaluate(script: str, arguments: dict[str, object]) -> dict[str, object]:\n"
+              "            result = original_evaluate(script, arguments)\n"
+              "            if arguments[\"method\"] == \"POST\":\n"
+              "                stop_event.set()\n"
+              "            return result\n"
+              "\n"
+              "        session.page.evaluate = evaluate\n"
+              "\n"
+              "        with self.assertRaises(OperationStopped):\n"
+              "            backend.unfollow(\"2\")\n"
+              "\n"
+              "        methods = [arguments[\"method\"] for _script, arguments in session.page.evaluate_calls]\n"
+              "        self.assertEqual(methods, [\"POST\", \"GET\"])\n"
+              "\n"
+              "    def test_ambiguous_2xx_is_accepted_only_after_post_write_state_check(self) -> None:\n",
+              "verified unfollow regression tests",
+          )
+          tests = replace_once(
+              tests,
+              "\n\nclass SharedBrowserRegressionTestCase(unittest.TestCase):\n",
+              "\n\nclass PackagedEntryRegressionTestCase(unittest.TestCase):\n"
+              "    def test_app_script_imports_without_package_context(self) -> None:\n"
+              "        repository_root = Path(__file__).resolve().parents[2]\n"
+              "        namespace = runpy.run_path(\n"
+              "            str(repository_root / \"apps/instagram_tools/app.py\"),\n"
+              "            run_name=\"instagram_tools_entry_import_test\",\n"
+              "        )\n"
+              "        self.assertIn(\"main\", namespace)\n"
+              "\n\nclass SharedBrowserRegressionTestCase(unittest.TestCase):\n",
+              "packaged entry regression test",
+          )
+          tests = replace_once(
+              tests,
+              "\n\nclass FakePersistentBrowser:\n",
+              "\n\n    def test_other_instagram_subdomain_navigates_to_web_home_once(self) -> None:\n"
+              "        page = SimpleNamespace(url=\"https://help.instagram.com/123456\")\n"
+              "        session = SharedChromeBrowserSession(Path(\"/tmp/instagram-tools-profile\"))\n"
+              "        session._require_page = Mock(return_value=page)\n"
+              "        session._has_session_cookie = Mock(return_value=True)\n"
+              "        session._page_looks_logged_out = Mock(return_value=False)\n"
+              "        session._safe_goto = Mock()\n"
+              "\n"
+              "        session.wait_until_logged_in(threading.Event())\n"
+              "\n"
+              "        session._safe_goto.assert_called_once_with(page, INSTAGRAM_HOME_URL)\n"
+              "\n\nclass FakePersistentBrowser:\n",
+              "Instagram subdomain navigation regression test",
+          )
+          tests_path.write_text(tests, encoding="utf-8")
+          PY
+
+          ruff check --fix apps/instagram_tools tests/regression/test_instagram_tools.py
+          ruff format apps/instagram_tools tests/regression/test_instagram_tools.py
+          python -m compileall -q apps/instagram_tools tests/regression/test_instagram_tools.py
+          git rm \
+            .github/workflows/apply-pr9-review-fixes.yml \
+            .github/workflows/apply-pr9-review-fixes-v2.yml
+      - name: Commit review fixes
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add apps/instagram_tools tests/regression/test_instagram_tools.py
+          git commit -m "fix: address PR 9 review findings"
+          git push origin HEAD:fix/unified-instagram-tools

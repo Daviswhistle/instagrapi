@@ -65,12 +65,14 @@ async ({path, method, body, csrfToken, appId, asbdId, timeoutMs}) => {
       signal: controller.signal
     });
     const text = await response.text();
-    // Return the untouched JSON text. Parsing it in JavaScript can round
+    // Return the untouched response body. Parsing JSON in JavaScript can round
     // Instagram's 64-bit numeric user IDs beyond Number.MAX_SAFE_INTEGER.
     return {
       ok: response.ok,
       statusCode: response.status,
       url: response.url,
+      redirected: response.redirected,
+      contentType: response.headers.get("content-type") || "",
       text
     };
   } catch (error) {
@@ -164,6 +166,7 @@ class PlaywrightFriendshipBackend:
             method="POST",
             body=body,
             csrf_token=csrf_token,
+            accept_non_json_success=True,
         )
 
     def _request_json(
@@ -173,6 +176,7 @@ class PlaywrightFriendshipBackend:
         method: str,
         body: str = "",
         csrf_token: str = "",
+        accept_non_json_success: bool = False,
     ) -> dict[str, Any]:
         self._raise_if_stopped()
         page = self.session._require_page()
@@ -209,12 +213,21 @@ class PlaywrightFriendshipBackend:
 
         status_code = int(result.get("statusCode") or 0)
         response_url = str(result.get("url") or "")
-        response_path = urlparse(response_url).path.casefold()
+        parsed_response_url = urlparse(response_url)
+        response_host = (parsed_response_url.hostname or "").casefold()
+        response_path = parsed_response_url.path.casefold()
+        expected_path = urlparse(path).path.casefold()
         response_text = str(result.get("text") or "")
+        content_type = str(result.get("contentType") or "").casefold()
+        redirected = bool(result.get("redirected"))
         try:
             payload = json.loads(response_text)
         except json.JSONDecodeError:
             payload = None
+            decoded_json = False
+        else:
+            decoded_json = True
+
         payload_dict = payload if isinstance(payload, dict) else {}
         message = " ".join(
             str(value)
@@ -226,11 +239,11 @@ class PlaywrightFriendshipBackend:
             )
             if value
         )
-        # Do not scan a successful relationship payload wholesale for words such
+        # Do not scan a successful relationship object wholesale for words such
         # as ``spam``. Instagram includes unrelated keys such as
         # ``show_spam_follow_request_tab`` in normal responses. Raw response text
-        # is only useful when the request failed or was not valid JSON.
-        if not message and (not result.get("ok") or payload is None):
+        # is useful for failed, non-JSON, and non-object JSON responses.
+        if not message and (not result.get("ok") or not isinstance(payload, dict)):
             message = response_text[:1000].strip()
         normalized = message.casefold()
         error_type = str(payload_dict.get("error_type") or "").casefold()
@@ -261,11 +274,57 @@ class PlaywrightFriendshipBackend:
             raise FriendshipRequestError(
                 f"Instagram 요청이 실패했습니다 (HTTP {status_code}): {message or '응답 내용 없음'}"
             )
-        if not isinstance(payload, dict):
-            raise FriendshipRequestError("Instagram이 JSON이 아닌 응답을 보냈습니다.")
-        if str(payload.get("status") or "").casefold() == "fail":
-            raise FriendshipRequestError(f"Instagram 요청이 실패했습니다: {message or '알 수 없는 오류'}")
-        return payload
+
+        is_unfollow_post = accept_non_json_success and method.upper() == "POST"
+        if is_unfollow_post and response_url:
+            final_path_matches = response_path.rstrip("/") == expected_path.rstrip("/")
+            trusted_final_url = (
+                not redirected and response_host in {"instagram.com", "www.instagram.com"} and final_path_matches
+            )
+            if not trusted_final_url:
+                raise FriendshipRequestError(
+                    "Instagram 언팔로우 요청이 예상한 엔드포인트에서 완료되지 않았습니다. "
+                    f"HTTP {status_code}, 최종 경로: {response_path or '확인 불가'}, "
+                    f"리다이렉트: {'예' if redirected else '아니오'}"
+                )
+
+        if isinstance(payload, dict):
+            if str(payload.get("status") or "").casefold() == "fail":
+                raise FriendshipRequestError(f"Instagram 요청이 실패했습니다: {message or '알 수 없는 오류'}")
+            return payload
+
+        if decoded_json:
+            raise FriendshipRequestError(
+                f"Instagram 응답 JSON 형식이 예상과 다릅니다. HTTP {status_code}, JSON 타입: {type(payload).__name__}"
+            )
+
+        if is_unfollow_post:
+            if not response_url:
+                raise FriendshipRequestError(
+                    "Instagram 언팔로우 응답의 최종 URL을 확인하지 못해 완료로 기록하지 않았습니다."
+                )
+
+            # Instagram's unfollow endpoint can return a successful 2xx response
+            # with an empty, plain-text, or HTML body. Once the response remains
+            # on the exact destroy endpoint, the HTTP status is the write
+            # acknowledgement; requiring JSON turns a completed unfollow into a
+            # false failure and prevents the remaining selection from running.
+            return {
+                "status": "ok",
+                "friendship_status": {"following": False},
+                "_transport": {
+                    "confirmation": "http_2xx",
+                    "status_code": status_code,
+                    "content_type": content_type,
+                    "redirected": redirected,
+                    "non_json_body": True,
+                },
+            }
+
+        raise FriendshipRequestError(
+            "Instagram이 JSON이 아닌 응답을 보냈습니다. "
+            f"HTTP {status_code}, Content-Type: {content_type or '확인 불가'}"
+        )
 
     def _raise_if_stopped(self) -> None:
         if self.stop_event and self.stop_event.is_set():

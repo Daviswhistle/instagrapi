@@ -20,8 +20,12 @@ Instagram이 필터링된 항목 때문에 빈 중간 페이지와 다음 커서
 이 경우 커서가 정상적으로 바뀌는 동안은 다음 페이지를 계속 확인합니다. 반대로 목록 페이지
 커서가 반복되거나, Instagram이 팔로워 목록 일부만 제공하거나, 응답 형식이 불완전하면
 목록 확인을 실패로 처리합니다. 사용자가 목록을 확인하고 대상을 선택한 뒤에는 그 선택만
-직접 실행하며 관계 목록을 다시 조회하지 않습니다. 각 언팔로우도 Instagram이
-`following=false`를 명시적으로 반환해야 완료로 기록합니다.
+직접 실행하며 관계 목록을 다시 조회하지 않습니다.
+
+각 언팔로우 요청에서 HTTP 2xx가 돌아오면 완료로 기록합니다. Instagram이 JSON을 반환하면
+실패·활동 제한 신호를 검사하고, 성공 응답을 빈 본문·일반 텍스트·HTML로 보내는 경우에는
+HTTP 성공 상태를 사용합니다. 로그인·체크포인트 페이지로 이동하거나 활동 제한 신호가
+확인되면 성공으로 간주하지 않습니다.
 
 ## 기본 설정
 
@@ -87,7 +91,9 @@ python -m apps.non_follower_cleaner.app
 테스트:
 
 ```bash
-python -m unittest -v tests.regression.test_non_follower_cleaner
+python -m unittest -v \
+  tests.regression.test_non_follower_cleaner \
+  tests.regression.test_non_follower_cleaner_http_success
 ```
 
 로컬 패키징:

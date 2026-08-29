@@ -9,7 +9,7 @@ on:
       - "apps/following_auto_liker/engine.py"
       - "apps/following_auto_liker/storage.py"
       - "apps/following_auto_liker/requirements.txt"
-      - "tests/regression/test_non_follower_cleaner.py"
+      - "tests/regression/test_non_follower_cleaner*.py"
       - ".github/workflows/non-follower-cleaner.yml"
   push:
     branches: ["master"]
@@ -20,7 +20,7 @@ on:
       - "apps/following_auto_liker/engine.py"
       - "apps/following_auto_liker/storage.py"
       - "apps/following_auto_liker/requirements.txt"
-      - "tests/regression/test_non_follower_cleaner.py"
+      - "tests/regression/test_non_follower_cleaner*.py"
       - ".github/workflows/non-follower-cleaner.yml"
 
 permissions:
@@ -47,11 +47,14 @@ jobs:
           python -m pip install -r apps/following_auto_liker/requirements.txt
       - name: Lint and format check
         run: |
-          ruff check apps/non_follower_cleaner tests/regression/test_non_follower_cleaner.py
-          ruff format --check apps/non_follower_cleaner tests/regression/test_non_follower_cleaner.py
+          ruff check apps/non_follower_cleaner tests/regression/test_non_follower_cleaner*.py
+          ruff format --check apps/non_follower_cleaner tests/regression/test_non_follower_cleaner*.py
       - name: Compile and import smoke test
         run: |
-          python -m compileall -q apps/non_follower_cleaner tests/regression/test_non_follower_cleaner.py
+          python -m compileall -q \
+            apps/non_follower_cleaner \
+            tests/regression/test_non_follower_cleaner.py \
+            tests/regression/test_non_follower_cleaner_http_success.py
           python - <<'PY'
           from apps.non_follower_cleaner.browser import PlaywrightFriendshipBackend
           from apps.non_follower_cleaner.engine import NonFollowerCleaner
@@ -60,7 +63,10 @@ jobs:
           assert NonFollowerCleaner
           PY
       - name: Run cleaner tests
-        run: python -m unittest -v tests.regression.test_non_follower_cleaner
+        run: >-
+          python -m unittest -v
+          tests.regression.test_non_follower_cleaner
+          tests.regression.test_non_follower_cleaner_http_success
 
   build:
     needs: test

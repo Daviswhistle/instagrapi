@@ -279,9 +279,7 @@ class PlaywrightFriendshipBackend:
         if is_unfollow_post:
             final_path_matches = response_path.rstrip("/") == expected_path.rstrip("/")
             trusted_final_url = (
-                not redirected
-                and response_host in {"instagram.com", "www.instagram.com"}
-                and final_path_matches
+                not redirected and response_host in {"instagram.com", "www.instagram.com"} and final_path_matches
             )
             if not trusted_final_url:
                 raise FriendshipRequestError(
@@ -297,8 +295,7 @@ class PlaywrightFriendshipBackend:
 
         if decoded_json:
             raise FriendshipRequestError(
-                "Instagram 응답 JSON 형식이 예상과 다릅니다. "
-                f"HTTP {status_code}, JSON 타입: {type(payload).__name__}"
+                f"Instagram 응답 JSON 형식이 예상과 다릅니다. HTTP {status_code}, JSON 타입: {type(payload).__name__}"
             )
 
         if is_unfollow_post:

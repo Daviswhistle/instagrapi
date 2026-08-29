@@ -45,7 +45,15 @@ GitHub Actions의 산출물은 GitHub가 한 번 더 ZIP으로 감싸서 제공�
 한 번만 풀면 Windows에서는 앱 ZIP, macOS에서는 DMG가 나옵니다. Mac에서는 DMG를 열고
 `NonFollowerCleaner.app`을 `Applications`로 옮긴 뒤 실행합니다. Releases에서는 DMG를 직접 받을 수 있습니다.
 
-첫 실행이 차단되면 Finder에서 앱을 Control-클릭한 뒤 **열기**를 선택합니다. 앱을 실행한 뒤
+현재 macOS 앱은 Developer ID 서명과 Apple 공증을 하지 않은 빌드입니다. 첫 실행이 차단되면
+다음 순서로 본인이 받은 파일임을 확인한 뒤 예외를 허용합니다.
+
+1. `Applications`의 `NonFollowerCleaner.app`을 한 번 실행해 차단 경고를 표시합니다.
+2. **Apple 메뉴 → 시스템 설정 → 개인정보 보호 및 보안**으로 이동합니다.
+3. 아래의 **보안** 영역에서 `NonFollowerCleaner`에 대한 **확인 없이 열기(Open Anyway)**를 누릅니다. 이 버튼은 앱 실행을 시도한 뒤 제한된 시간 동안만 표시됩니다.
+4. 로그인 암호 또는 Touch ID로 승인하고, 다시 나타나는 경고에서 **열기**를 누릅니다.
+
+출처를 신뢰하고 파일이 변조되지 않았다고 확신할 때만 이 예외를 허용해야 합니다. 앱을 실행한 뒤
 **목록 확인**을 누르고, 첫 사용이면 열린 Chrome에서 직접 로그인합니다. 이후에는 기존 로그인 상태를 재사용합니다.
 
 ## 저장 데이터

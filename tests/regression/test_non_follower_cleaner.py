@@ -176,16 +176,67 @@ class NonFollowerCleanerEngineTestCase(unittest.TestCase):
         with self.assertRaises(IncompleteFriendshipListError):
             NonFollowerCleaner(backend).scan()
 
-    def test_scan_fails_closed_on_empty_page_with_next_cursor(self):
+    def test_scan_continues_through_empty_page_with_advancing_cursor(self):
         backend = FakeBackend(
             {
-                ("following", ""): {"users": [], "next_max_id": "next"},
-                ("followers", ""): {"users": [], "next_max_id": None},
+                ("following", ""): {
+                    "users": [user("2"), user("3")],
+                    "next_max_id": None,
+                },
+                ("followers", ""): {"users": [], "next_max_id": "next"},
+                ("followers", "next"): {
+                    "users": [user("3")],
+                    "next_max_id": None,
+                },
             }
+        )
+        waits: list[float] = []
+        logs: list[str] = []
+        cleaner = NonFollowerCleaner(
+            backend,
+            wait_fn=lambda _stop, seconds: waits.append(seconds) or False,
+            on_log=logs.append,
+        )
+
+        result = cleaner.scan()
+
+        self.assertEqual([account.pk for account in result.followers], ["3"])
+        self.assertEqual([account.pk for account in result.non_followers], ["2"])
+        self.assertEqual(waits, [1.0])
+        self.assertEqual(
+            backend.fetch_calls,
+            [
+                ("following", "1", "", 100),
+                ("followers", "1", "", 100),
+                ("followers", "1", "next", 100),
+            ],
+        )
+        self.assertTrue(any("빈 중간 페이지" in message for message in logs))
+
+    def test_scan_fails_closed_when_empty_page_repeats_cursor(self):
+        backend = FakeBackend(
+            {
+                ("following", ""): {"users": [user("2")], "next_max_id": None},
+                ("followers", ""): {"users": [], "next_max_id": "same"},
+                ("followers", "same"): {"users": [], "next_max_id": "same"},
+            }
+        )
+        cleaner = NonFollowerCleaner(
+            backend,
+            wait_fn=lambda _stop, _seconds: False,
         )
 
         with self.assertRaises(IncompleteFriendshipListError):
-            NonFollowerCleaner(backend).scan()
+            cleaner.scan()
+
+        self.assertEqual(
+            backend.fetch_calls,
+            [
+                ("following", "1", "", 100),
+                ("followers", "1", "", 100),
+                ("followers", "1", "same", 100),
+            ],
+        )
 
     def test_scan_fails_closed_when_explicit_more_signal_lacks_cursor(self):
         for key, value in (("has_more", True), ("more_available", "true")):

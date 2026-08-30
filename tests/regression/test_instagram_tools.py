@@ -301,7 +301,7 @@ class PackagedEntryRegressionTestCase(unittest.TestCase):
 
 
 class SharedBrowserRegressionTestCase(unittest.TestCase):
-    def test_logged_in_instagram_page_is_reused_without_home_reload(self) -> None:
+    def test_saved_session_is_revalidated_by_home_navigation(self) -> None:
         page = SimpleNamespace(url="https://www.instagram.com/?variant=following")
         session = SharedChromeBrowserSession(Path("/tmp/instagram-tools-profile"))
         session._require_page = Mock(return_value=page)
@@ -311,7 +311,26 @@ class SharedBrowserRegressionTestCase(unittest.TestCase):
 
         session.wait_until_logged_in(threading.Event())
 
-        session._safe_goto.assert_not_called()
+        session._safe_goto.assert_called_once_with(page, INSTAGRAM_HOME_URL)
+
+    def test_stale_saved_cookie_does_not_skip_the_login_surface(self) -> None:
+        page = SimpleNamespace(url="https://www.instagram.com/?variant=following")
+        messages: list[str] = []
+        session = SharedChromeBrowserSession(
+            Path("/tmp/instagram-tools-profile"),
+            on_log=messages.append,
+        )
+        session._require_page = Mock(return_value=page)
+        session._has_session_cookie = Mock(return_value=True)
+        session._page_looks_logged_out = Mock(side_effect=[True, False])
+        session._safe_goto = Mock()
+
+        session.wait_until_logged_in(threading.Event())
+
+        session._safe_goto.assert_called_once_with(page, INSTAGRAM_HOME_URL)
+        self.assertTrue(any("로그인하세요" in message for message in messages))
+        self.assertTrue(any("로그인을 확인했습니다" in message for message in messages))
+        self.assertEqual(session._page_looks_logged_out.call_count, 2)
 
     def test_expired_session_on_web_host_navigates_home_to_show_login(self) -> None:
         page = SimpleNamespace(url="https://www.instagram.com/?variant=following")
@@ -428,6 +447,21 @@ class LoginInterruptedBrowser(FakePersistentBrowser):
         self.login_checks += 1
         if self.login_checks == 1:
             stop_event.set()
+
+
+class StoppedScanner:
+    def __init__(self, _config, *, on_like=None, **_kwargs) -> None:
+        self.on_like = on_like or (lambda: None)
+
+    def scan_once(self, _feed, _stop_event) -> ScanSummary:
+        self.on_like()
+        return ScanSummary(
+            discovered=3,
+            liked=1,
+            already_liked=1,
+            sponsored=1,
+            stopped=True,
+        )
 
 
 class RestrictingScanner:
@@ -551,6 +585,37 @@ class PersistentWorkerRegressionTestCase(unittest.TestCase):
         self.assertEqual(len(FakePersistentBrowser.instances), 2)
         self.assertEqual(FakePersistentBrowser.instances[1].started, 1)
         self.assertEqual(FakePersistentBrowser.instances[1].closed, 1)
+
+    def test_stopped_auto_like_publishes_partial_summary_and_timestamp(self) -> None:
+        events: queue.Queue[tuple[str, object]] = queue.Queue()
+        worker = InstagramAutomationWorker(
+            FakeStorage(),
+            events,
+            browser_factory=FakePersistentBrowser,
+        )
+
+        with patch("apps.instagram_tools.worker.FollowingFeedScanner", StoppedScanner):
+            worker._run_auto_like(
+                AutoLikeBrowser(),
+                {"config": AppConfig().validate()},
+                threading.Event(),
+            )
+
+        captured: list[tuple[str, object]] = []
+        while not events.empty():
+            captured.append(events.get_nowait())
+
+        logs = [payload for kind, payload in captured if kind == "log"]
+        statuses = [payload for kind, payload in captured if kind == "auto_status"]
+        self.assertTrue(
+            any(
+                isinstance(message, str) and "중지 전 처리 결과:" in message and "좋아요 1개" in message
+                for message in logs
+            )
+        )
+        self.assertEqual(statuses[-1]["message"], "중지 전 결과 · 이번 1개 · 누적 1개")
+        self.assertEqual(statuses[-1]["session_likes"], 1)
+        self.assertTrue(statuses[-1]["last_scan_at"])
 
     def test_restriction_publishes_partial_auto_like_summary_and_timestamp(self) -> None:
         events: queue.Queue[tuple[str, object]] = queue.Queue()

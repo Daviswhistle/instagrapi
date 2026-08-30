@@ -241,10 +241,21 @@ class InstagramAutomationWorker:
                 raise
 
             last_scan_at = datetime.now().astimezone().isoformat(timespec="seconds")
+            summary_message = FollowingAutoLiker._summary_message(summary)
             if summary.stopped:
+                self.events.put(("log", f"중지 전 처리 결과: {summary_message}"))
+                self.events.put(
+                    (
+                        "auto_status",
+                        {
+                            "message": f"중지 전 결과 · 이번 {summary.liked}개 · 누적 {session_likes}개",
+                            "session_likes": session_likes,
+                            "last_scan_at": last_scan_at,
+                        },
+                    )
+                )
                 break
 
-            summary_message = FollowingAutoLiker._summary_message(summary)
             self.events.put(("log", summary_message))
             self.events.put(
                 (

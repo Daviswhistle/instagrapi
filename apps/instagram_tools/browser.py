@@ -144,7 +144,7 @@ def is_instagram_web_url(url: str) -> bool:
 
 
 class SharedChromeBrowserSession(ChromeBrowserSession):
-    """Keep one Chrome context alive and avoid navigating to Home twice."""
+    """Keep one Chrome context alive while validating each saved login."""
 
     def is_alive(self) -> bool:
         if self.context is None:
@@ -158,19 +158,14 @@ class SharedChromeBrowserSession(ChromeBrowserSession):
     def wait_until_logged_in(self, stop_event: threading.Event) -> None:
         page = self._require_page(create_if_missing=True)
 
-        # A persistent context often already has an authenticated Instagram page.
-        # Reusing it avoids the visible blank-page -> Home -> Home reload sequence.
-        navigated_home = False
-        if not is_instagram_web_url(page.url):
-            self._safe_goto(page, INSTAGRAM_HOME_URL)
-            navigated_home = True
+        # A locally retained sessionid is not proof that Instagram still accepts
+        # the session. Reload Home once per operation so a server-side expiry is
+        # rendered as a login surface instead of reusing a stale feed forever.
+        self._safe_goto(page, INSTAGRAM_HOME_URL)
 
         if self._has_session_cookie() and not self._page_looks_logged_out(page):
             self.on_log("전용 Chrome에 저장된 Instagram 로그인을 사용합니다.")
             return
-
-        if not navigated_home:
-            self._safe_goto(page, INSTAGRAM_HOME_URL)
 
         self.on_log(
             "처음 한 번만 열린 Chrome 창에서 Instagram에 로그인하세요. 앱에는 아이디나 비밀번호를 입력하지 않습니다."

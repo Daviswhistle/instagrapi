@@ -26,6 +26,11 @@ APP_TITLE = "Instagram 도구"
 MIN_WINDOW_HEIGHT = 620
 MAX_WINDOW_HEIGHT = 820
 WINDOW_VERTICAL_MARGIN = 120
+COMPACT_LAYOUT_SCREEN_HEIGHT = 850
+
+
+def use_compact_layout(screen_height: int) -> bool:
+    return int(screen_height) <= COMPACT_LAYOUT_SCREEN_HEIGHT
 
 
 def window_height_for_screen(screen_height: int) -> int:
@@ -55,7 +60,9 @@ class InstagramToolsApp(Tk):
     def __init__(self, storage: Storage | None = None) -> None:
         super().__init__()
         self.title(APP_TITLE)
-        self.geometry(f"980x{window_height_for_screen(self.winfo_screenheight())}")
+        screen_height = self.winfo_screenheight()
+        self.compact_ui = use_compact_layout(screen_height)
+        self.geometry(f"980x{window_height_for_screen(screen_height)}")
         self.minsize(860, MIN_WINDOW_HEIGHT)
 
         self.storage = storage or Storage.default()
@@ -98,10 +105,28 @@ class InstagramToolsApp(Tk):
         self.cleaner_counts_var = StringVar(value="팔로워 0 · 팔로잉 0 · 미팔로워 0")
 
     def _build_ui(self) -> None:
-        container = ttk.Frame(self, padding=16)
+        compact = self.compact_ui
+        outer_padding = 10 if compact else 16
+        outer_gap = 6 if compact else 10
+        tab_padding = 6 if compact else 14
+        log_padding = 4 if compact else 8
+        log_height = 2 if compact else 9
+        self._section_padding = 6 if compact else 12
+        self._status_padding = 6 if compact else 10
+        self._list_padding = 4 if compact else 8
+        self._row_pady = 1 if compact else 4
+        self._status_row_pady = 1 if compact else 3
+        self._action_pady = 6 if compact else 12
+        self._section_gap = 6 if compact else 10
+
+        container = ttk.Frame(self, padding=outer_padding)
         container.pack(fill="both", expand=True)
 
-        ttk.Label(container, text=APP_TITLE, font=("", 20, "bold")).pack(anchor="w")
+        ttk.Label(
+            container,
+            text=APP_TITLE,
+            font=("", 18 if compact else 20, "bold"),
+        ).pack(anchor="w")
         ttk.Label(
             container,
             text=(
@@ -110,41 +135,66 @@ class InstagramToolsApp(Tk):
             ),
             wraplength=930,
             justify=LEFT,
-        ).pack(anchor="w", pady=(6, 8))
-        ttk.Label(container, textvariable=self.global_status_var, font=("", 10, "bold")).pack(anchor="w")
+        ).pack(anchor="w", pady=(4 if compact else 6, 4 if compact else 8))
+        ttk.Label(
+            container,
+            textvariable=self.global_status_var,
+            font=("", 10, "bold"),
+        ).pack(anchor="w")
 
         self.notebook = ttk.Notebook(container)
-        self.notebook.pack(fill="both", expand=True, pady=(10, 0))
-        auto_tab = ttk.Frame(self.notebook, padding=14)
-        cleaner_tab = ttk.Frame(self.notebook, padding=14)
+        auto_tab = ttk.Frame(self.notebook, padding=tab_padding)
+        cleaner_tab = ttk.Frame(self.notebook, padding=tab_padding)
         self.notebook.add(auto_tab, text="자동 좋아요")
         self.notebook.add(cleaner_tab, text="미팔로워 정리")
         self._build_auto_tab(auto_tab)
         self._build_cleaner_tab(cleaner_tab)
 
-        log_frame = ttk.LabelFrame(container, text="공통 진행 기록", padding=8)
-        log_frame.pack(fill="both", pady=(10, 0))
-        self.log_text = Text(log_frame, height=9, wrap="word", state="disabled")
-        log_scrollbar = ttk.Scrollbar(log_frame, orient="vertical", command=self.log_text.yview)
+        self.log_frame = ttk.LabelFrame(container, text="공통 진행 기록", padding=log_padding)
+        self.log_text = Text(
+            self.log_frame,
+            height=log_height,
+            wrap="word",
+            state="disabled",
+        )
+        log_scrollbar = ttk.Scrollbar(
+            self.log_frame,
+            orient="vertical",
+            command=self.log_text.yview,
+        )
         self.log_text.configure(yscrollcommand=log_scrollbar.set)
         self.log_text.pack(side=LEFT, fill="both", expand=True)
         log_scrollbar.pack(side=RIGHT, fill="y")
 
-        bottom = ttk.Frame(container)
-        bottom.pack(fill="x", pady=(8, 0))
+        self.bottom_bar = ttk.Frame(container)
         ttk.Label(
-            bottom,
+            self.bottom_bar,
             text="비공식 Instagram 웹 인터페이스를 사용하므로 활동 제한이나 호환성 변경이 발생할 수 있습니다.",
             wraplength=670,
             justify=LEFT,
         ).pack(side=LEFT, fill="x", expand=True)
-        ttk.Button(bottom, text="데이터 폴더 열기", command=self._open_data_folder).pack(side=RIGHT)
+        self.open_data_button = ttk.Button(
+            self.bottom_bar,
+            text="데이터 폴더 열기",
+            command=self._open_data_folder,
+        )
+        self.open_data_button.pack(side=RIGHT)
         self.clear_browser_button = ttk.Button(
-            bottom,
+            self.bottom_bar,
             text="전용 Chrome 데이터 지우기",
             command=self._clear_browser_data,
         )
         self.clear_browser_button.pack(side=RIGHT, padx=(0, 8))
+
+        # Reserve fixed bottom controls before the notebook consumes the remaining
+        # height. Compact mode also reduces low-value whitespace and log height.
+        self.bottom_bar.pack(
+            side="bottom",
+            fill="x",
+            pady=(6 if compact else 8, 0),
+        )
+        self.log_frame.pack(side="bottom", fill="both", pady=(outer_gap, 0))
+        self.notebook.pack(fill="both", expand=True, pady=(outer_gap, 0))
 
     def _build_auto_tab(self, parent: ttk.Frame) -> None:
         ttk.Label(
@@ -152,30 +202,52 @@ class InstagramToolsApp(Tk):
             text="팔로잉 시간순 피드에서 아직 좋아요하지 않은 일반 게시물만 처리합니다.",
             wraplength=900,
             justify=LEFT,
-        ).pack(anchor="w", pady=(0, 10))
+        ).pack(anchor="w", pady=(0, self._section_gap))
 
-        settings = ttk.LabelFrame(parent, text="자동 좋아요 설정", padding=12)
+        settings = ttk.LabelFrame(
+            parent,
+            text="자동 좋아요 설정",
+            padding=self._section_padding,
+        )
         settings.pack(fill="x")
         self._setting_row(settings, 0, "피드 확인 간격", self.auto_interval_var, "분", self.auto_entries)
         self._setting_row(settings, 1, "좋아요 전 최소 대기", self.auto_min_delay_var, "초", self.auto_entries)
         self._setting_row(settings, 2, "좋아요 전 최대 대기", self.auto_max_delay_var, "초", self.auto_entries)
         self._setting_row(
-            settings, 3, "회차당 최대 좋아요", self.auto_max_likes_var, "개 · 0은 제한 없음", self.auto_entries
+            settings,
+            3,
+            "회차당 최대 좋아요",
+            self.auto_max_likes_var,
+            "개 · 0은 제한 없음",
+            self.auto_entries,
         )
         self._setting_row(settings, 4, "최대 스크롤 횟수", self.auto_max_scroll_var, "회", self.auto_entries)
 
         actions = ttk.Frame(parent)
-        actions.pack(fill="x", pady=12)
-        self.auto_start_button = ttk.Button(actions, text="자동 좋아요 시작", command=self._start_auto_like)
+        actions.pack(fill="x", pady=self._action_pady)
+        self.auto_start_button = ttk.Button(
+            actions,
+            text="자동 좋아요 시작",
+            command=self._start_auto_like,
+        )
         self.auto_start_button.pack(side=LEFT)
-        self.auto_stop_button = ttk.Button(actions, text="중지", command=self._stop, state="disabled")
+        self.auto_stop_button = ttk.Button(
+            actions,
+            text="중지",
+            command=self._stop,
+            state="disabled",
+        )
         self.auto_stop_button.pack(side=LEFT, padx=(8, 0))
 
-        status = ttk.LabelFrame(parent, text="자동 좋아요 상태", padding=12)
-        status.pack(fill="x")
-        self._status_row(status, 0, "상태", self.auto_status_var)
-        self._status_row(status, 1, "이번 실행 좋아요", self.auto_likes_var)
-        self._status_row(status, 2, "마지막 확인", self.auto_last_scan_var)
+        self.auto_status_frame = ttk.LabelFrame(
+            parent,
+            text="자동 좋아요 상태",
+            padding=self._section_padding,
+        )
+        self.auto_status_frame.pack(fill="x")
+        self._status_row(self.auto_status_frame, 0, "상태", self.auto_status_var)
+        self._status_row(self.auto_status_frame, 1, "이번 실행 좋아요", self.auto_likes_var)
+        self._status_row(self.auto_status_frame, 2, "마지막 확인", self.auto_last_scan_var)
 
     def _build_cleaner_tab(self, parent: ttk.Frame) -> None:
         ttk.Label(
@@ -186,12 +258,30 @@ class InstagramToolsApp(Tk):
             ),
             wraplength=900,
             justify=LEFT,
-        ).pack(anchor="w", pady=(0, 10))
+        ).pack(anchor="w", pady=(0, self._section_gap))
 
-        settings = ttk.LabelFrame(parent, text="언팔로우 설정", padding=12)
+        settings = ttk.LabelFrame(
+            parent,
+            text="언팔로우 설정",
+            padding=self._section_padding,
+        )
         settings.pack(fill="x")
-        self._setting_row(settings, 0, "언팔로우 전 최소 대기", self.cleaner_min_delay_var, "초", self.cleaner_entries)
-        self._setting_row(settings, 1, "언팔로우 전 최대 대기", self.cleaner_max_delay_var, "초", self.cleaner_entries)
+        self._setting_row(
+            settings,
+            0,
+            "언팔로우 전 최소 대기",
+            self.cleaner_min_delay_var,
+            "초",
+            self.cleaner_entries,
+        )
+        self._setting_row(
+            settings,
+            1,
+            "언팔로우 전 최대 대기",
+            self.cleaner_max_delay_var,
+            "초",
+            self.cleaner_entries,
+        )
         self._setting_row(
             settings,
             2,
@@ -202,7 +292,7 @@ class InstagramToolsApp(Tk):
         )
 
         actions = ttk.Frame(parent)
-        actions.pack(fill="x", pady=12)
+        actions.pack(fill="x", pady=self._action_pady)
         self.scan_button = ttk.Button(actions, text="목록 확인", command=self._start_scan)
         self.scan_button.pack(side=LEFT)
         self.unfollow_button = ttk.Button(
@@ -212,22 +302,46 @@ class InstagramToolsApp(Tk):
             state="disabled",
         )
         self.unfollow_button.pack(side=LEFT, padx=(8, 0))
-        self.cleaner_stop_button = ttk.Button(actions, text="중지", command=self._stop, state="disabled")
+        self.cleaner_stop_button = ttk.Button(
+            actions,
+            text="중지",
+            command=self._stop,
+            state="disabled",
+        )
         self.cleaner_stop_button.pack(side=LEFT, padx=(8, 0))
         self.select_all_button = ttk.Button(actions, text="전체 선택", command=self._select_all)
         self.select_all_button.pack(side=RIGHT)
         self.clear_selection_button = ttk.Button(actions, text="전체 해제", command=self._clear_selection)
         self.clear_selection_button.pack(side=RIGHT, padx=(0, 8))
 
-        status = ttk.LabelFrame(parent, text="미팔로워 정리 상태", padding=10)
-        status.pack(fill="x")
-        ttk.Label(status, textvariable=self.cleaner_status_var, font=("", 10, "bold")).pack(anchor="w")
-        ttk.Label(status, textvariable=self.cleaner_counts_var).pack(anchor="w", pady=(4, 0))
+        self.cleaner_status_frame = ttk.LabelFrame(
+            parent,
+            text="미팔로워 정리 상태",
+            padding=self._status_padding,
+        )
+        self.cleaner_status_frame.pack(fill="x")
+        ttk.Label(
+            self.cleaner_status_frame,
+            textvariable=self.cleaner_status_var,
+            font=("", 10, "bold"),
+        ).pack(anchor="w")
+        ttk.Label(
+            self.cleaner_status_frame,
+            textvariable=self.cleaner_counts_var,
+        ).pack(anchor="w", pady=(self._status_row_pady, 0))
 
-        list_frame = ttk.LabelFrame(parent, text="나를 팔로우하지 않는 계정", padding=8)
-        list_frame.pack(fill="both", expand=True, pady=(10, 0))
+        self.cleaner_list_frame = ttk.LabelFrame(
+            parent,
+            text="나를 팔로우하지 않는 계정",
+            padding=self._list_padding,
+        )
+        self.cleaner_list_frame.pack(
+            fill="both",
+            expand=True,
+            pady=(self._section_gap, 0),
+        )
         self.tree = ttk.Treeview(
-            list_frame,
+            self.cleaner_list_frame,
             columns=("username", "full_name", "private", "verified"),
             show="headings",
             selectmode="extended",
@@ -240,14 +354,18 @@ class InstagramToolsApp(Tk):
         self.tree.column("full_name", width=350, anchor="w")
         self.tree.column("private", width=70, anchor="center")
         self.tree.column("verified", width=70, anchor="center")
-        scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.tree.yview)
+        scrollbar = ttk.Scrollbar(
+            self.cleaner_list_frame,
+            orient="vertical",
+            command=self.tree.yview,
+        )
         self.tree.configure(yscrollcommand=scrollbar.set)
         self.tree.pack(side=LEFT, fill="both", expand=True)
         scrollbar.pack(side=RIGHT, fill="y")
         self.tree.bind("<<TreeviewSelect>>", lambda _event: self._refresh_controls())
 
-    @staticmethod
     def _setting_row(
+        self,
         parent: ttk.LabelFrame,
         row: int,
         label: str,
@@ -255,16 +373,48 @@ class InstagramToolsApp(Tk):
         unit: str,
         registry: list[ttk.Entry],
     ) -> None:
-        ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", pady=4)
+        ttk.Label(parent, text=label).grid(
+            row=row,
+            column=0,
+            sticky="w",
+            pady=self._row_pady,
+        )
         entry = ttk.Entry(parent, textvariable=variable, width=10)
-        entry.grid(row=row, column=1, sticky="w", padx=(12, 6), pady=4)
-        ttk.Label(parent, text=unit).grid(row=row, column=2, sticky="w", pady=4)
+        entry.grid(
+            row=row,
+            column=1,
+            sticky="w",
+            padx=(12, 6),
+            pady=self._row_pady,
+        )
+        ttk.Label(parent, text=unit).grid(
+            row=row,
+            column=2,
+            sticky="w",
+            pady=self._row_pady,
+        )
         registry.append(entry)
 
-    @staticmethod
-    def _status_row(parent: ttk.LabelFrame, row: int, label: str, variable: StringVar) -> None:
-        ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", pady=3)
-        ttk.Label(parent, textvariable=variable).grid(row=row, column=1, sticky="w", padx=(14, 0), pady=3)
+    def _status_row(
+        self,
+        parent: ttk.LabelFrame,
+        row: int,
+        label: str,
+        variable: StringVar,
+    ) -> None:
+        ttk.Label(parent, text=label).grid(
+            row=row,
+            column=0,
+            sticky="w",
+            pady=self._status_row_pady,
+        )
+        ttk.Label(parent, textvariable=variable).grid(
+            row=row,
+            column=1,
+            sticky="w",
+            padx=(14, 0),
+            pady=self._status_row_pady,
+        )
 
     def _read_auto_config(self) -> AppConfig:
         try:

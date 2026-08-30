@@ -24,13 +24,13 @@ from apps.non_follower_cleaner.engine import (
 
 APP_TITLE = "Instagram 도구"
 MIN_WINDOW_HEIGHT = 620
-MAX_WINDOW_HEIGHT = 820
+MAX_WINDOW_HEIGHT = 960
 WINDOW_VERTICAL_MARGIN = 120
-COMPACT_LAYOUT_SCREEN_HEIGHT = 850
+COMPACT_LAYOUT_WINDOW_HEIGHT = 820
 
 
-def use_compact_layout(screen_height: int) -> bool:
-    return int(screen_height) <= COMPACT_LAYOUT_SCREEN_HEIGHT
+def use_compact_layout(window_height: int) -> bool:
+    return int(window_height) <= COMPACT_LAYOUT_WINDOW_HEIGHT
 
 
 def window_height_for_screen(screen_height: int) -> int:
@@ -61,8 +61,9 @@ class InstagramToolsApp(Tk):
         super().__init__()
         self.title(APP_TITLE)
         screen_height = self.winfo_screenheight()
-        self.compact_ui = use_compact_layout(screen_height)
-        self.geometry(f"980x{window_height_for_screen(screen_height)}")
+        window_height = window_height_for_screen(screen_height)
+        self.compact_ui = use_compact_layout(window_height)
+        self.geometry(f"980x{window_height}")
         self.minsize(860, MIN_WINDOW_HEIGHT)
 
         self.storage = storage or Storage.default()
@@ -111,7 +112,7 @@ class InstagramToolsApp(Tk):
         outer_gap = 6 if compact else 10
         tab_padding = 6 if compact else 14
         log_padding = 4 if compact else 8
-        log_height = 2 if compact else 9
+        log_height = 2 if compact else 5
         self._section_padding = 6 if compact else 12
         self._status_padding = 6 if compact else 10
         self._list_padding = 4 if compact else 8

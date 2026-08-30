@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -43,6 +44,32 @@ def _assert_fully_visible(app: app_module.InstagramToolsApp, widget, label: str)
     )
 
 
+def _assert_tree_rows_visible(
+    app: app_module.InstagramToolsApp,
+    count: int = 4,
+) -> None:
+    item_ids: list[str] = []
+    for index in range(count):
+        item_id = f"layout-row-{index}"
+        app.tree.insert(
+            "",
+            "end",
+            iid=item_id,
+            values=(f"@user{index}", f"User {index}", "아니오", "아니오"),
+        )
+        item_ids.append(item_id)
+    app.tree.selection_set(item_ids)
+    app.update_idletasks()
+
+    for item_id in item_ids:
+        bounds = app.tree.bbox(item_id)
+        assert bounds, f"{item_id} is not visible in the account list"
+        _x, top, _width, height = bounds
+        assert top + height <= app.tree.winfo_height(), (
+            f"{item_id} extends below the tree: {top + height}px > {app.tree.winfo_height()}px"
+        )
+
+
 def main() -> None:
     original_worker = app_module.InstagramAutomationWorker
     app_module.InstagramAutomationWorker = _FakeWorker
@@ -62,9 +89,13 @@ def main() -> None:
             app = app_module.InstagramToolsApp(storage=storage)
             app.update_idletasks()
 
-            assert app.winfo_screenheight() == 768
-            assert app.compact_ui
-            assert app.winfo_height() <= 680
+            expected_screen_height = int(os.environ.get("EXPECTED_SCREEN_HEIGHT", "768"))
+            expected_compact = os.environ.get("EXPECTED_COMPACT", "1") == "1"
+            expected_window_height = app_module.window_height_for_screen(expected_screen_height)
+
+            assert app.winfo_screenheight() == expected_screen_height
+            assert app.compact_ui is expected_compact
+            assert abs(app.winfo_height() - expected_window_height) <= 2
 
             app.notebook.select(0)
             app.update_idletasks()
@@ -88,6 +119,7 @@ def main() -> None:
                 (app.bottom_bar, "bottom controls on cleaner tab"),
             ):
                 _assert_fully_visible(app, widget, label)
+            _assert_tree_rows_visible(app)
     finally:
         if app is not None:
             logger = app.logger

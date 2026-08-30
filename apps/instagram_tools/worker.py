@@ -105,7 +105,8 @@ class InstagramAutomationWorker:
                         self.storage.clear_browser_profile()
                         self.events.put(("profile_cleared", None))
                     else:
-                        browser = self._ensure_browser(browser, stop_event)
+                        browser = self._ensure_browser(browser)
+                        self._wait_until_logged_in(browser, stop_event)
                         if command.kind == "auto_like":
                             self._run_auto_like(browser, command.payload, stop_event)
                         elif command.kind == "scan":
@@ -143,21 +144,32 @@ class InstagramAutomationWorker:
     def _ensure_browser(
         self,
         browser: SharedChromeBrowserSession | None,
-        stop_event: threading.Event,
     ) -> SharedChromeBrowserSession:
-        if browser is None or not browser.is_alive():
-            browser = self._discard_browser(browser)
-            browser = self.browser_factory(
-                self.storage.paths.chrome_profile,
-                on_log=lambda message: self.events.put(("log", message.replace("자동 좋아요", "Instagram 도구"))),
-            )
-            self.events.put(("status", "Chrome을 여는 중입니다."))
+        if browser is not None and browser.is_alive():
+            return browser
+
+        self._discard_browser(browser)
+        browser = self.browser_factory(
+            self.storage.paths.chrome_profile,
+            on_log=lambda message: self.events.put(("log", message.replace("자동 좋아요", "Instagram 도구"))),
+        )
+        self.events.put(("status", "Chrome을 여는 중입니다."))
+        try:
             browser.start()
+        except Exception:
+            self._discard_browser(browser)
+            raise
+        return browser
+
+    def _wait_until_logged_in(
+        self,
+        browser: SharedChromeBrowserSession,
+        stop_event: threading.Event,
+    ) -> None:
         self.events.put(("status", "Chrome에서 Instagram 로그인을 확인하고 있습니다."))
         browser.wait_until_logged_in(stop_event)
         if stop_event.is_set():
             raise OperationStopped("사용자가 Instagram 작업을 중지했습니다.")
-        return browser
 
     def _run_auto_like(
         self,

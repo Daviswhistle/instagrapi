@@ -10,6 +10,7 @@ on:
       - "apps/following_auto_liker/README.md"
       - "apps/non_follower_cleaner/README.md"
       - "tests/regression/test_instagram_tools.py"
+      - "tests/regression/test_instagram_tools_final_review.py"
       - "tests/regression/instagram_tools_layout_smoke.py"
       - "tests/regression/test_following_auto_liker.py"
       - "tests/regression/test_non_follower_cleaner*.py"
@@ -26,6 +27,7 @@ on:
       - "apps/following_auto_liker/README.md"
       - "apps/non_follower_cleaner/README.md"
       - "tests/regression/test_instagram_tools.py"
+      - "tests/regression/test_instagram_tools_final_review.py"
       - "tests/regression/instagram_tools_layout_smoke.py"
       - "tests/regression/test_following_auto_liker.py"
       - "tests/regression/test_non_follower_cleaner*.py"
@@ -60,6 +62,7 @@ jobs:
             apps/following_auto_liker \
             apps/non_follower_cleaner \
             tests/regression/test_instagram_tools.py \
+            tests/regression/test_instagram_tools_final_review.py \
             tests/regression/instagram_tools_layout_smoke.py \
             tests/regression/test_following_auto_liker.py \
             tests/regression/test_non_follower_cleaner*.py
@@ -68,6 +71,7 @@ jobs:
             apps/following_auto_liker \
             apps/non_follower_cleaner \
             tests/regression/test_instagram_tools.py \
+            tests/regression/test_instagram_tools_final_review.py \
             tests/regression/instagram_tools_layout_smoke.py \
             tests/regression/test_following_auto_liker.py \
             tests/regression/test_non_follower_cleaner*.py
@@ -78,6 +82,7 @@ jobs:
             apps/following_auto_liker \
             apps/non_follower_cleaner \
             tests/regression/test_instagram_tools.py \
+            tests/regression/test_instagram_tools_final_review.py \
             tests/regression/instagram_tools_layout_smoke.py
           python - <<'PY'
           from apps.instagram_tools.app import InstagramToolsApp
@@ -93,6 +98,7 @@ jobs:
         run: >-
           python -m unittest -v
           tests.regression.test_instagram_tools
+          tests.regression.test_instagram_tools_final_review
           tests.regression.test_following_auto_liker
           tests.regression.test_non_follower_cleaner
           tests.regression.test_non_follower_cleaner_http_success

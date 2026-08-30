@@ -8,6 +8,7 @@ on:
       - "apps/following_auto_liker/**"
       - "apps/non_follower_cleaner/**"
       - "tests/regression/test_instagram_tools.py"
+      - "tests/regression/instagram_tools_layout_smoke.py"
       - "tests/regression/test_following_auto_liker.py"
       - "tests/regression/test_non_follower_cleaner*.py"
       - ".github/workflows/instagram-tools.yml"
@@ -21,6 +22,7 @@ on:
       - "apps/following_auto_liker/**"
       - "apps/non_follower_cleaner/**"
       - "tests/regression/test_instagram_tools.py"
+      - "tests/regression/instagram_tools_layout_smoke.py"
       - "tests/regression/test_following_auto_liker.py"
       - "tests/regression/test_non_follower_cleaner*.py"
       - ".github/workflows/instagram-tools.yml"
@@ -54,6 +56,7 @@ jobs:
             apps/following_auto_liker \
             apps/non_follower_cleaner \
             tests/regression/test_instagram_tools.py \
+            tests/regression/instagram_tools_layout_smoke.py \
             tests/regression/test_following_auto_liker.py \
             tests/regression/test_non_follower_cleaner*.py
           ruff format --check \
@@ -61,6 +64,7 @@ jobs:
             apps/following_auto_liker \
             apps/non_follower_cleaner \
             tests/regression/test_instagram_tools.py \
+            tests/regression/instagram_tools_layout_smoke.py \
             tests/regression/test_following_auto_liker.py \
             tests/regression/test_non_follower_cleaner*.py
       - name: Compile and import smoke test
@@ -69,7 +73,8 @@ jobs:
             apps/instagram_tools \
             apps/following_auto_liker \
             apps/non_follower_cleaner \
-            tests/regression/test_instagram_tools.py
+            tests/regression/test_instagram_tools.py \
+            tests/regression/instagram_tools_layout_smoke.py
           python - <<'PY'
           from apps.instagram_tools.app import InstagramToolsApp
           from apps.instagram_tools.browser import SharedChromeBrowserSession, VerifiedFriendshipBackend
@@ -87,6 +92,14 @@ jobs:
           tests.regression.test_following_auto_liker
           tests.regression.test_non_follower_cleaner
           tests.regression.test_non_follower_cleaner_http_success
+      - name: Verify compact 1366x768 layout
+        run: |
+          if ! command -v xvfb-run >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y xvfb
+          fi
+          xvfb-run -a -s "-screen 0 1366x768x24" \
+            python -m tests.regression.instagram_tools_layout_smoke
 
   build:
     needs: test

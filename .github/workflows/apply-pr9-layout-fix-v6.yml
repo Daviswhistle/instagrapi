@@ -1,0 +1,93 @@
+name: Apply PR 9 Layout Fix v6
+
+on:
+  push:
+    branches:
+      - fix/unified-instagram-tools
+    paths:
+      - .github/workflows/apply-pr9-layout-fix-v6.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out review branch
+        uses: actions/checkout@v7
+        with:
+          ref: fix/unified-instagram-tools
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: 3.13.5
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install . ruff==0.16.2
+          python -m pip install -r apps/following_auto_liker/requirements.txt
+          if ! command -v xvfb-run >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y xvfb
+          fi
+
+      - name: Apply layout correction
+        run: |
+          python .github/scripts/apply_pr9_layout_fix.py
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/workflows/instagram-tools.yml')
+          text = path.read_text(encoding='utf-8')
+          old = 'python tests/regression/instagram_tools_layout_smoke.py'
+          new = 'python -m tests.regression.instagram_tools_layout_smoke'
+          if text.count(old) != 1:
+              raise RuntimeError('expected exactly one layout smoke invocation')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+
+      - name: Format and lint
+        run: |
+          ruff format apps/instagram_tools/app.py tests/regression/instagram_tools_layout_smoke.py
+          ruff check \
+            apps/instagram_tools \
+            apps/following_auto_liker \
+            apps/non_follower_cleaner \
+            tests/regression/test_instagram_tools.py \
+            tests/regression/instagram_tools_layout_smoke.py \
+            tests/regression/test_following_auto_liker.py \
+            tests/regression/test_non_follower_cleaner*.py
+
+      - name: Run desktop regression suite
+        run: >-
+          python -m unittest -v
+          tests.regression.test_instagram_tools
+          tests.regression.test_following_auto_liker
+          tests.regression.test_non_follower_cleaner
+          tests.regression.test_non_follower_cleaner_http_success
+
+      - name: Verify compact laptop layout
+        run: >-
+          xvfb-run -a -s "-screen 0 1366x768x24"
+          python -m tests.regression.instagram_tools_layout_smoke
+
+      - name: Commit verified correction
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm --ignore-unmatch \
+            .github/workflows/apply-pr9-layout-fix-v4.yml \
+            .github/workflows/apply-pr9-layout-fix-v5.yml \
+            .github/workflows/apply-pr9-layout-fix-v6.yml \
+            .github/scripts/apply_pr9_layout_fix.py
+          git add \
+            apps/instagram_tools/app.py \
+            tests/regression/instagram_tools_layout_smoke.py \
+            .github/workflows/instagram-tools.yml
+          git diff --cached --check
+          git commit -m "fix: keep unified controls visible on laptop screens"
+          git push origin HEAD:fix/unified-instagram-tools

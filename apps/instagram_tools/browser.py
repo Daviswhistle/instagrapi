@@ -264,7 +264,22 @@ class VerifiedFriendshipBackend:
             self._require_expected_final_url(response, path)
 
             if not response.ok:
-                diagnostics.append(f"시도 {attempt_number}: HTTP {response.status_code}")
+                # A failed HTTP response does not prove that Instagram rejected the
+                # write: the server may commit it and fail while producing the
+                # response. Verify the current target before another write.
+                confirmation = self._confirm_unfollow_after_write(
+                    user_id,
+                    attempt_number=attempt_number,
+                    status_code=response.status_code,
+                    confirmation="post_error_friendship_check",
+                )
+                if confirmation is not None:
+                    return confirmation
+                message = self._response_message(response)
+                detail = f": {message}" if message else ""
+                diagnostics.append(
+                    f"시도 {attempt_number}: HTTP {response.status_code}{detail} · 팔로우 상태가 그대로임"
+                )
                 continue
 
             payload = response.json_value()

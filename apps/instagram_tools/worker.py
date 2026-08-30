@@ -115,6 +115,7 @@ class InstagramAutomationWorker:
                 except OperationStopped:
                     self.events.put(("status", "사용자 요청으로 중지했습니다."))
                 except UnfollowRunError as exc:
+                    LOGGER.exception("Unfollow operation failed: %s", exc.user_message)
                     self.events.put(("unfollow_error", (exc.user_message, exc.summary)))
                 except InstagramRestrictionError as exc:
                     self.events.put(("error", exc.user_message))

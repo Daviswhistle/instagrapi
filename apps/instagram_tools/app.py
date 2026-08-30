@@ -554,7 +554,7 @@ class InstagramToolsApp(Tk):
                     self._append_log(str(payload))
                     if self.running_kind == "auto_like":
                         self.auto_status_var.set("오류로 중지")
-                    elif self.running_kind:
+                    elif self.running_kind in {"scan", "unfollow"}:
                         self.cleaner_status_var.set("오류로 중지")
                     if not self.closing:
                         messagebox.showerror(APP_TITLE, str(payload))

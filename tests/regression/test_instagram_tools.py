@@ -13,7 +13,11 @@ from unittest.mock import Mock, patch
 from apps.following_auto_liker.browser import INSTAGRAM_HOME_URL
 from apps.following_auto_liker.engine import InstagramRestrictionError, ScanSummary
 from apps.following_auto_liker.storage import AppConfig
-from apps.instagram_tools.app import InstagramToolsApp, window_height_for_screen
+from apps.instagram_tools.app import (
+    InstagramToolsApp,
+    use_compact_layout,
+    window_height_for_screen,
+)
 from apps.instagram_tools.browser import SharedChromeBrowserSession, VerifiedFriendshipBackend
 from apps.instagram_tools.worker import InstagramAutomationWorker
 from apps.non_follower_cleaner.engine import (
@@ -405,6 +409,15 @@ class UnifiedAppStateRegressionTestCase(unittest.TestCase):
 
         self.assertGreaterEqual(height, 620)
         self.assertLessEqual(height, 680)
+
+    def test_compact_density_uses_the_resulting_window_height(self) -> None:
+        medium_height = window_height_for_screen(900)
+        tall_height = window_height_for_screen(1080)
+
+        self.assertEqual(medium_height, 780)
+        self.assertTrue(use_compact_layout(medium_height))
+        self.assertEqual(tall_height, 960)
+        self.assertFalse(use_compact_layout(tall_height))
 
 
 class FakeStorage:

@@ -103,6 +103,10 @@ class BrowserResponse:
             return None
 
 
+class _AmbiguousWriteTimeout(FriendshipRequestError):
+    """A POST may have completed even though the local fetch timed out."""
+
+
 def is_instagram_web_host(hostname: str | None) -> bool:
     return str(hostname or "").casefold().rstrip(".") == INSTAGRAM_WEB_HOST.casefold()
 
@@ -238,12 +242,25 @@ class VerifiedFriendshipBackend:
         diagnostics: list[str] = []
 
         for attempt_number, (path, include_ig_headers) in enumerate(attempts, start=1):
-            response = self._request(
-                path,
-                method="POST",
-                csrf_token=csrf_token,
-                include_ig_headers=include_ig_headers,
-            )
+            try:
+                response = self._request(
+                    path,
+                    method="POST",
+                    csrf_token=csrf_token,
+                    include_ig_headers=include_ig_headers,
+                )
+            except _AmbiguousWriteTimeout:
+                confirmation = self._confirm_unfollow_after_write(
+                    user_id,
+                    attempt_number=attempt_number,
+                    status_code=0,
+                    confirmation="post_timeout_friendship_check",
+                )
+                if confirmation is not None:
+                    return confirmation
+                diagnostics.append(f"시도 {attempt_number}: 요청 시간 초과 후 팔로우 상태가 그대로임")
+                continue
+
             self._require_expected_final_url(response, path)
 
             if not response.ok:
@@ -264,29 +281,47 @@ class VerifiedFriendshipBackend:
             # generic HTML/empty response while leaving the relationship intact.
             # Verify only the account just written; this is a post-condition check,
             # not a pre-check or another full follower/following scan.
-            self._wait_after_write()
-            relationship = self.friendship(user_id, honor_stop=False)
-            following = relationship.get("following")
-            if following is False:
-                return {
-                    "status": "ok",
-                    "friendship_status": {"following": False},
-                    "_transport": {
-                        "confirmation": "post_write_friendship_check",
-                        "attempt": attempt_number,
-                        "status_code": response.status_code,
-                    },
-                }
-            if following is True:
-                diagnostics.append(f"시도 {attempt_number}: 팔로우 상태가 그대로임")
-                continue
-            raise FriendshipRequestError(
-                "언팔로우 요청 뒤 현재 팔로우 상태를 명확히 확인하지 못했습니다. 추가 작업을 중지했습니다."
+            confirmation = self._confirm_unfollow_after_write(
+                user_id,
+                attempt_number=attempt_number,
+                status_code=response.status_code,
+                confirmation="post_write_friendship_check",
             )
+            if confirmation is not None:
+                return confirmation
+            diagnostics.append(f"시도 {attempt_number}: 팔로우 상태가 그대로임")
+            continue
 
         detail = " · ".join(diagnostics) or "응답 내용 없음"
         raise FriendshipRequestError(
             f"Instagram이 선택한 계정의 언팔로우를 실제로 반영하지 않았습니다. 두 웹 엔드포인트를 시도한 결과: {detail}"
+        )
+
+    def _confirm_unfollow_after_write(
+        self,
+        user_id: str,
+        *,
+        attempt_number: int,
+        status_code: int,
+        confirmation: str,
+    ) -> dict[str, Any] | None:
+        self._wait_after_write()
+        relationship = self.friendship(user_id, honor_stop=False)
+        following = relationship.get("following")
+        if following is False:
+            return {
+                "status": "ok",
+                "friendship_status": {"following": False},
+                "_transport": {
+                    "confirmation": confirmation,
+                    "attempt": attempt_number,
+                    "status_code": status_code,
+                },
+            }
+        if following is True:
+            return None
+        raise FriendshipRequestError(
+            "언팔로우 요청 뒤 현재 팔로우 상태를 명확히 확인하지 못했습니다. 추가 작업을 중지했습니다."
         )
 
     def _request_json(
@@ -356,9 +391,10 @@ class VerifiedFriendshipBackend:
         if not isinstance(result, dict):
             raise FriendshipRequestError("Instagram 요청 결과를 읽지 못했습니다.")
         if result.get("timedOut"):
-            raise FriendshipRequestError(
-                f"Instagram 네트워크 요청이 {self.request_timeout_seconds:g}초 안에 완료되지 않아 중지했습니다."
-            )
+            message = f"Instagram 네트워크 요청이 {self.request_timeout_seconds:g}초 안에 완료되지 않았습니다."
+            if method.upper() == "POST":
+                raise _AmbiguousWriteTimeout(message)
+            raise FriendshipRequestError(f"{message} 작업을 중지했습니다.")
         if result.get("networkError"):
             raise FriendshipRequestError(f"Instagram 네트워크 요청에 실패했습니다: {result['networkError']}")
 

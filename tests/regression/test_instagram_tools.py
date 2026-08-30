@@ -8,9 +8,11 @@ import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from apps.following_auto_liker.browser import INSTAGRAM_HOME_URL
+from apps.following_auto_liker.engine import InstagramRestrictionError, ScanSummary
+from apps.following_auto_liker.storage import AppConfig
 from apps.instagram_tools.app import InstagramToolsApp, window_height_for_screen
 from apps.instagram_tools.browser import SharedChromeBrowserSession, VerifiedFriendshipBackend
 from apps.instagram_tools.worker import InstagramAutomationWorker
@@ -175,6 +177,28 @@ class VerifiedUnfollowRegressionTestCase(unittest.TestCase):
         self.assertEqual(calls[0]["path"], "/api/v1/friendships/destroy/2/")
         self.assertTrue(str(calls[1]["path"]).startswith("/api/v1/friendships/show/2/"))
         self.assertNotIn("body", calls[0])
+
+    def test_timed_out_post_is_verified_before_reporting_failure(self) -> None:
+        backend, session = self.backend(
+            [
+                {"networkError": "AbortError", "timedOut": True},
+                response(
+                    SHOW_URL,
+                    text='{"status":"ok","following":false}',
+                    content_type="application/json",
+                ),
+            ]
+        )
+
+        payload = backend.unfollow("2")
+
+        self.assertEqual(
+            payload["_transport"]["confirmation"],
+            "post_timeout_friendship_check",
+        )
+        self.assertIs(payload["friendship_status"]["following"], False)
+        methods = [arguments["method"] for _script, arguments in session.page.evaluate_calls]
+        self.assertEqual(methods, ["POST", "GET"])
 
     def test_fallback_endpoint_runs_when_primary_write_did_not_change_state(self) -> None:
         fallback_payload = {"status": "ok", "friendship_status": {"following": False}}
@@ -373,6 +397,24 @@ class FakePersistentBrowser:
         self.alive = False
 
 
+class RestrictingScanner:
+    def __init__(self, _config, *, on_like=None, **_kwargs) -> None:
+        self.on_like = on_like or (lambda: None)
+
+    def scan_once(self, _feed, _stop_event) -> ScanSummary:
+        self.on_like()
+        raise InstagramRestrictionError(
+            "Instagram이 좋아요 활동을 제한했습니다.",
+            summary=ScanSummary(discovered=2, liked=1, sponsored=1),
+        )
+
+
+class AutoLikeBrowser:
+    @staticmethod
+    def following_feed():
+        return object()
+
+
 class RecordingWorker(InstagramAutomationWorker):
     def _run_scan(self, _browser, _payload, _stop_event) -> None:
         return None
@@ -448,6 +490,38 @@ class PersistentWorkerRegressionTestCase(unittest.TestCase):
         self.assertEqual(len(FakePersistentBrowser.instances), 2)
         self.assertEqual(FakePersistentBrowser.instances[1].started, 1)
         self.assertEqual(FakePersistentBrowser.instances[1].closed, 1)
+
+    def test_restriction_publishes_partial_auto_like_summary_and_timestamp(self) -> None:
+        events: queue.Queue[tuple[str, object]] = queue.Queue()
+        worker = InstagramAutomationWorker(
+            FakeStorage(),
+            events,
+            browser_factory=FakePersistentBrowser,
+        )
+
+        with patch("apps.instagram_tools.worker.FollowingFeedScanner", RestrictingScanner):
+            with self.assertRaises(InstagramRestrictionError):
+                worker._run_auto_like(
+                    AutoLikeBrowser(),
+                    {"config": AppConfig().validate()},
+                    threading.Event(),
+                )
+
+        captured: list[tuple[str, object]] = []
+        while not events.empty():
+            captured.append(events.get_nowait())
+
+        logs = [payload for kind, payload in captured if kind == "log"]
+        statuses = [payload for kind, payload in captured if kind == "auto_status"]
+        self.assertTrue(
+            any(
+                isinstance(message, str) and "제한 감지 전 처리 결과:" in message and "좋아요 1개" in message
+                for message in logs
+            )
+        )
+        self.assertEqual(statuses[-1]["message"], "활동 제한으로 중지 · 누적 1개")
+        self.assertEqual(statuses[-1]["session_likes"], 1)
+        self.assertTrue(statuses[-1]["last_scan_at"])
 
     def test_unexpected_worker_exception_is_logged_with_traceback(self) -> None:
         events: queue.Queue[tuple[str, object]] = queue.Queue()

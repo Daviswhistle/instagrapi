@@ -4,6 +4,8 @@ Google Chrome에서 Instagram의 **시간순 팔로잉 피드**를 열고, 발�
 
 기존 버전처럼 Instagram 아이디와 비밀번호를 앱에 입력하지 않습니다. 앱이 별도의 Chrome 프로필을 열며, 첫 실행에 그 창에서 직접 로그인하면 이후 실행에도 로그인 상태가 남습니다.
 
+> 이 기능은 현재 **Instagram Tools** 통합 앱의 **자동 좋아요** 탭으로 배포됩니다. 이 디렉터리는 기능 구현과 기존 단독 실행 진입점을 유지하지만, 공식 패키지와 Release는 통합 앱 이름으로만 생성됩니다.
+
 ## 동작 방식
 
 1. 자동 좋아요 전용 Chrome 프로필로 Google Chrome을 엽니다.
@@ -18,18 +20,18 @@ Google Chrome에서 Instagram의 **시간순 팔로잉 피드**를 열고, 발�
 
 ## 가장 쉬운 사용법
 
-1. 저장소의 **Releases**에서 운영체제에 맞는 ZIP을 받습니다.
-   - Windows: `FollowingAutoLiker-Windows.zip`
-   - Apple Silicon Mac: `FollowingAutoLiker-macOS-Apple-Silicon.zip`
-   - Intel Mac: `FollowingAutoLiker-macOS-Intel.zip`
-2. ZIP을 풀고 앱을 실행합니다. Google Chrome이 설치되어 있어야 합니다.
-3. 기본 설정을 그대로 두고 **시작**을 누릅니다.
+1. 저장소의 **Releases** 또는 GitHub Actions에서 운영체제에 맞는 통합 패키지를 받습니다.
+   - Windows: `InstagramTools-Windows`
+   - Apple Silicon Mac: `InstagramTools-macOS-Apple-Silicon`
+   - Intel Mac: `InstagramTools-macOS-Intel`
+2. Windows는 Actions ZIP을 한 번 풀어 `InstagramTools.exe`를 실행합니다. Mac은 Actions ZIP 안의 DMG를 열고 `InstagramTools.app`을 `Applications`로 옮깁니다. Google Chrome이 설치되어 있어야 합니다.
+3. 통합 앱의 **자동 좋아요** 탭에서 기본 설정을 확인하고 **자동 좋아요 시작**을 누릅니다.
 4. 처음 열린 Chrome 창에서 Instagram에 직접 로그인합니다. 2단계 인증이나 본인 확인도 그 창에서 직접 완료합니다.
-5. 앱과 앱이 연 Chrome 창을 열어 둡니다. 이후에는 저장된 로그인 상태를 사용합니다.
+5. 앱과 앱이 연 Chrome 창을 열어 둡니다. 이후에는 저장된 로그인 상태를 사용하며, 미팔로워 정리 탭도 같은 창과 로그인을 재사용합니다.
 
-앱은 전용 Chrome 프로필을 보호하기 위해 한 번에 한 인스턴스만 실행됩니다. 이미 실행 중일 때 두 번째 앱을 열면 안내를 표시하고 종료하며, 실행 중인 다른 인스턴스 아래의 로그인 데이터를 삭제하지 않습니다.
+통합 앱은 전용 Chrome 프로필을 보호하기 위해 한 번에 한 인스턴스만 실행됩니다. 이미 실행 중일 때 두 번째 앱을 열면 안내를 표시하고 종료하며, 실행 중인 다른 인스턴스 아래의 로그인 데이터를 삭제하지 않습니다.
 
-Windows SmartScreen이나 macOS Gatekeeper가 경고할 수 있습니다. 배포 파일에 코드 서명을 하지 않았기 때문입니다. macOS에서는 앱을 Control-클릭한 뒤 **열기**를 선택하면 됩니다.
+Windows SmartScreen이나 macOS Gatekeeper가 경고할 수 있습니다. 배포 파일에 코드 서명을 하지 않았기 때문입니다. macOS에서는 앱을 한 번 실행한 뒤 **시스템 설정 → 개인정보 보호 및 보안 → 보안 → 확인 없이 열기**에서 예외를 승인할 수 있습니다. 출처와 파일 무결성을 신뢰할 때만 실행해야 합니다.
 
 ## 기본 설정
 
@@ -93,7 +95,7 @@ Python 3.10 이상과 Google Chrome이 필요합니다.
 ```bash
 python -m pip install -e .
 python -m pip install -r apps/following_auto_liker/requirements.txt
-python -m apps.following_auto_liker.app
+python -m apps.instagram_tools.app
 ```
 
 설치된 Google Chrome을 `channel="chrome"`으로 실행하므로 `playwright install`로 별도 Chromium을 내려받을 필요는 없습니다.
@@ -111,15 +113,15 @@ python -m unittest -v tests.regression.test_following_auto_liker
 ```bash
 python -m pip install pyinstaller
 pyinstaller --noconfirm --clean --windowed --onedir \
-  --name FollowingAutoLiker --paths . \
+  --name InstagramTools --paths . \
   --collect-all playwright --copy-metadata playwright \
-  apps/following_auto_liker/app.py
+  apps/instagram_tools/app.py
 ```
 
 ## 배포 빌드
 
-`.github/workflows/following-auto-liker.yml`은 Windows와 Apple Silicon/Intel macOS 패키지를 만듭니다.
+`.github/workflows/instagram-tools.yml`이 자동 좋아요와 미팔로워 정리를 함께 담은 통합 패키지를 만듭니다.
 
-- Pull request와 `master` 반영 시: 테스트 후 Actions 산출물 생성
-- 수동 실행: Actions의 `Following Auto Liker`에서 `Run workflow`
-- `following-auto-liker-v*` 태그 푸시 시: 세 운영체제 패키지를 GitHub Release로 게시
+- Pull request와 `master` 반영 시: 회귀 테스트 후 Windows와 Apple Silicon/Intel macOS 산출물 생성
+- 수동 실행: Actions의 `Instagram Tools`에서 `Run workflow`
+- `instagram-tools-v*` 태그 푸시 시: `InstagramTools-Windows.zip`과 두 macOS DMG를 GitHub Release로 게시

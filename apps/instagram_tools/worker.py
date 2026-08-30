@@ -204,7 +204,29 @@ class InstagramAutomationWorker:
 
         while not stop_event.is_set():
             self.events.put(("log", "팔로잉 시간순 피드를 처음부터 확인합니다."))
-            summary = scanner.scan_once(feed, stop_event)
+            try:
+                summary = scanner.scan_once(feed, stop_event)
+            except InstagramRestrictionError as exc:
+                last_scan_at = datetime.now().astimezone().isoformat(timespec="seconds")
+                if exc.summary is not None:
+                    self.events.put(
+                        (
+                            "log",
+                            f"제한 감지 전 처리 결과: {FollowingAutoLiker._summary_message(exc.summary)}",
+                        )
+                    )
+                self.events.put(
+                    (
+                        "auto_status",
+                        {
+                            "message": f"활동 제한으로 중지 · 누적 {session_likes}개",
+                            "session_likes": session_likes,
+                            "last_scan_at": last_scan_at,
+                        },
+                    )
+                )
+                raise
+
             last_scan_at = datetime.now().astimezone().isoformat(timespec="seconds")
             if summary.stopped:
                 break

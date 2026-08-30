@@ -125,14 +125,16 @@ class SharedChromeBrowserSession(ChromeBrowserSession):
 
         # A persistent context often already has an authenticated Instagram page.
         # Reusing it avoids the visible blank-page -> Home -> Home reload sequence.
+        navigated_home = False
         if not is_instagram_web_host(current_host):
             self._safe_goto(page, INSTAGRAM_HOME_URL)
+            navigated_home = True
 
         if self._has_session_cookie() and not self._page_looks_logged_out(page):
             self.on_log("전용 Chrome에 저장된 Instagram 로그인을 사용합니다.")
             return
 
-        if not is_instagram_web_host(urlparse(page.url).hostname):
+        if not navigated_home:
             self._safe_goto(page, INSTAGRAM_HOME_URL)
 
         self.on_log(

@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 from apps.following_auto_liker.browser import INSTAGRAM_HOME_URL
+from apps.instagram_tools.app import InstagramToolsApp, window_height_for_screen
 from apps.instagram_tools.browser import SharedChromeBrowserSession, VerifiedFriendshipBackend
 from apps.instagram_tools.worker import InstagramAutomationWorker
 from apps.non_follower_cleaner.engine import (
@@ -264,6 +265,18 @@ class SharedBrowserRegressionTestCase(unittest.TestCase):
 
         session._safe_goto.assert_not_called()
 
+    def test_expired_session_on_web_host_navigates_home_to_show_login(self) -> None:
+        page = SimpleNamespace(url="https://www.instagram.com/?variant=following")
+        session = SharedChromeBrowserSession(Path("/tmp/instagram-tools-profile"))
+        session._require_page = Mock(return_value=page)
+        session._has_session_cookie = Mock(side_effect=[False, True])
+        session._page_looks_logged_out = Mock(return_value=False)
+        session._safe_goto = Mock()
+
+        session.wait_until_logged_in(threading.Event())
+
+        session._safe_goto.assert_called_once_with(page, INSTAGRAM_HOME_URL)
+
     def test_non_instagram_start_page_navigates_home_once(self) -> None:
         page = SimpleNamespace(url="about:blank")
         session = SharedChromeBrowserSession(Path("/tmp/instagram-tools-profile"))
@@ -287,6 +300,51 @@ class SharedBrowserRegressionTestCase(unittest.TestCase):
         session.wait_until_logged_in(threading.Event())
 
         session._safe_goto.assert_called_once_with(page, INSTAGRAM_HOME_URL)
+
+
+class FakeStringVar:
+    def __init__(self, value: str) -> None:
+        self.value = value
+
+    def get(self) -> str:
+        return self.value
+
+    def set(self, value: str) -> None:
+        self.value = value
+
+
+class UnifiedAppStateRegressionTestCase(unittest.TestCase):
+    def test_finished_operation_finalizes_only_a_pending_stop_status(self) -> None:
+        app = object.__new__(InstagramToolsApp)
+        app.auto_status_var = FakeStringVar("중지 요청됨")
+        app.cleaner_status_var = FakeStringVar("목록 확인 완료")
+
+        app._finalize_finished_tab_status("auto_like")
+
+        self.assertEqual(app.auto_status_var.get(), "사용자 요청으로 중지")
+        self.assertEqual(app.cleaner_status_var.get(), "목록 확인 완료")
+
+        app.auto_status_var.set("오류로 중지")
+        app.cleaner_status_var.set("중지 요청됨")
+        app._finalize_finished_tab_status("scan")
+
+        self.assertEqual(app.auto_status_var.get(), "오류로 중지")
+        self.assertEqual(app.cleaner_status_var.get(), "사용자 요청으로 중지")
+
+    def test_window_height_fits_a_1366_by_768_laptop_display(self) -> None:
+        height = window_height_for_screen(768)
+
+        self.assertGreaterEqual(height, 620)
+        self.assertLessEqual(height, 680)
+
+
+class FakeStorage:
+    def __init__(self) -> None:
+        self.paths = SimpleNamespace(chrome_profile=Path("/tmp/instagram-tools-profile"))
+        self.clear_calls = 0
+
+    def clear_browser_profile(self) -> None:
+        self.clear_calls += 1
 
 
 class FakePersistentBrowser:
@@ -320,25 +378,32 @@ class RecordingWorker(InstagramAutomationWorker):
         return None
 
 
+class FailingWorker(InstagramAutomationWorker):
+    def _run_scan(self, _browser, _payload, _stop_event) -> None:
+        raise RuntimeError("worker exploded")
+
+
 class PersistentWorkerRegressionTestCase(unittest.TestCase):
     def setUp(self) -> None:
         FakePersistentBrowser.instances.clear()
 
     @staticmethod
-    def wait_for_finished(events: queue.Queue[tuple[str, object]], timeout: float = 3.0) -> None:
+    def wait_for_finished(events: queue.Queue[tuple[str, object]], timeout: float = 3.0) -> list[tuple[str, object]]:
+        seen: list[tuple[str, object]] = []
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             try:
-                kind, _payload = events.get(timeout=0.1)
+                event = events.get(timeout=0.1)
             except queue.Empty:
                 continue
-            if kind == "operation_finished":
-                return
+            seen.append(event)
+            if event[0] == "operation_finished":
+                return seen
         raise AssertionError("worker did not finish operation")
 
     def test_two_operations_reuse_one_browser_until_application_shutdown(self) -> None:
         events: queue.Queue[tuple[str, object]] = queue.Queue()
-        storage = SimpleNamespace(paths=SimpleNamespace(chrome_profile=Path("/tmp/instagram-tools-profile")))
+        storage = FakeStorage()
         worker = RecordingWorker(storage, events, browser_factory=FakePersistentBrowser)
         worker.start()
 
@@ -355,6 +420,50 @@ class PersistentWorkerRegressionTestCase(unittest.TestCase):
         self.assertEqual(browser.started, 1)
         self.assertEqual(browser.login_checks, 2)
         self.assertEqual(browser.closed, 1)
+
+    def test_profile_clear_closes_browser_and_next_operation_uses_a_fresh_instance(self) -> None:
+        events: queue.Queue[tuple[str, object]] = queue.Queue()
+        storage = FakeStorage()
+        worker = RecordingWorker(storage, events, browser_factory=FakePersistentBrowser)
+        worker.start()
+
+        self.assertTrue(worker.submit("scan"))
+        self.wait_for_finished(events)
+        first_browser = FakePersistentBrowser.instances[0]
+
+        self.assertTrue(worker.submit("clear_profile"))
+        clear_events = self.wait_for_finished(events)
+
+        self.assertIn(("profile_cleared", None), clear_events)
+        self.assertEqual(storage.clear_calls, 1)
+        self.assertEqual(first_browser.closed, 1)
+        self.assertEqual(len(FakePersistentBrowser.instances), 1)
+
+        self.assertTrue(worker.submit("scan"))
+        self.wait_for_finished(events)
+        worker.shutdown()
+        worker.thread.join(timeout=3)
+
+        self.assertFalse(worker.thread.is_alive())
+        self.assertEqual(len(FakePersistentBrowser.instances), 2)
+        self.assertEqual(FakePersistentBrowser.instances[1].started, 1)
+        self.assertEqual(FakePersistentBrowser.instances[1].closed, 1)
+
+    def test_unexpected_worker_exception_is_logged_with_traceback(self) -> None:
+        events: queue.Queue[tuple[str, object]] = queue.Queue()
+        storage = FakeStorage()
+        worker = FailingWorker(storage, events, browser_factory=FakePersistentBrowser)
+        worker.start()
+
+        with self.assertLogs("instagram_tools.worker", level="ERROR") as captured:
+            self.assertTrue(worker.submit("scan"))
+            self.wait_for_finished(events)
+
+        worker.shutdown()
+        worker.thread.join(timeout=3)
+
+        self.assertFalse(worker.thread.is_alive())
+        self.assertIn("RuntimeError: worker exploded", "\n".join(captured.output))
 
 
 if __name__ == "__main__":

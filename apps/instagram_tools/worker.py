@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import queue
 import threading
 from dataclasses import dataclass
@@ -25,9 +26,10 @@ from apps.non_follower_cleaner.engine import (
 
 from .browser import SharedChromeBrowserSession, VerifiedFriendshipBackend
 
-OperationKind = Literal["auto_like", "scan", "unfollow"]
+OperationKind = Literal["auto_like", "scan", "unfollow", "clear_profile"]
 EventQueue = queue.Queue[tuple[str, object]]
 BrowserFactory = Callable[..., SharedChromeBrowserSession]
+LOGGER = logging.getLogger("instagram_tools.worker")
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,13 +98,20 @@ class InstagramAutomationWorker:
                     break
                 stop_event = self._current_stop
                 try:
-                    browser = self._ensure_browser(browser, stop_event)
-                    if command.kind == "auto_like":
-                        self._run_auto_like(browser, command.payload, stop_event)
-                    elif command.kind == "scan":
-                        self._run_scan(browser, command.payload, stop_event)
-                    elif command.kind == "unfollow":
-                        self._run_unfollow(browser, command.payload, stop_event)
+                    if command.kind == "clear_profile":
+                        if browser is not None:
+                            browser.close()
+                        browser = None
+                        self.storage.clear_browser_profile()
+                        self.events.put(("profile_cleared", None))
+                    else:
+                        browser = self._ensure_browser(browser, stop_event)
+                        if command.kind == "auto_like":
+                            self._run_auto_like(browser, command.payload, stop_event)
+                        elif command.kind == "scan":
+                            self._run_scan(browser, command.payload, stop_event)
+                        elif command.kind == "unfollow":
+                            self._run_unfollow(browser, command.payload, stop_event)
                 except OperationStopped:
                     self.events.put(("status", "사용자 요청으로 중지했습니다."))
                 except UnfollowRunError as exc:
@@ -114,6 +123,7 @@ class InstagramAutomationWorker:
                         browser = self._discard_browser(browser)
                     self.events.put(("error", exc.user_message))
                 except Exception as exc:
+                    LOGGER.exception("Unexpected worker failure during %s", command.kind)
                     self.events.put(
                         (
                             "error",

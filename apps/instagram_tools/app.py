@@ -23,6 +23,16 @@ from apps.non_follower_cleaner.engine import (
 )
 
 APP_TITLE = "Instagram 도구"
+MIN_WINDOW_HEIGHT = 620
+MAX_WINDOW_HEIGHT = 820
+WINDOW_VERTICAL_MARGIN = 120
+
+
+def window_height_for_screen(screen_height: int) -> int:
+    return max(
+        MIN_WINDOW_HEIGHT,
+        min(MAX_WINDOW_HEIGHT, int(screen_height) - WINDOW_VERTICAL_MARGIN),
+    )
 
 
 def configure_logging(storage: Storage) -> logging.Logger:
@@ -45,8 +55,8 @@ class InstagramToolsApp(Tk):
     def __init__(self, storage: Storage | None = None) -> None:
         super().__init__()
         self.title(APP_TITLE)
-        self.geometry("980x860")
-        self.minsize(860, 740)
+        self.geometry(f"980x{window_height_for_screen(self.winfo_screenheight())}")
+        self.minsize(860, MIN_WINDOW_HEIGHT)
 
         self.storage = storage or Storage.default()
         self.logger = configure_logging(self.storage)
@@ -398,7 +408,20 @@ class InstagramToolsApp(Tk):
                         self.cleaner_status_var.set("오류로 중지")
                     if not self.closing:
                         messagebox.showerror(APP_TITLE, str(payload))
+                elif kind == "profile_cleared":
+                    self._invalidate_results(
+                        counts_message="로그인 정보가 초기화되었습니다 · 목록을 다시 확인해 주세요"
+                    )
+                    self.auto_status_var.set("로그인 정보 초기화됨")
+                    self.cleaner_status_var.set("목록 확인 전")
+                    self._append_log("전용 Chrome 데이터와 저장된 Instagram 로그인을 지웠습니다.")
+                    if not self.closing:
+                        messagebox.showinfo(
+                            APP_TITLE,
+                            "전용 Chrome 데이터를 지웠습니다. 다음 작업에서 Instagram에 다시 로그인해 주세요.",
+                        )
                 elif kind == "operation_finished":
+                    self._finalize_finished_tab_status(payload)
                     self.running_kind = ""
                     self.global_status_var.set("대기 중 · Chrome 창을 다음 작업에 재사용합니다.")
                     self._refresh_controls()
@@ -409,6 +432,12 @@ class InstagramToolsApp(Tk):
             pass
         if not self.closing:
             self.after(100, self._drain_events)
+
+    def _finalize_finished_tab_status(self, finished_kind: object) -> None:
+        if finished_kind == "auto_like" and self.auto_status_var.get() == "중지 요청됨":
+            self.auto_status_var.set("사용자 요청으로 중지")
+        elif finished_kind in {"scan", "unfollow"} and self.cleaner_status_var.get() == "중지 요청됨":
+            self.cleaner_status_var.set("사용자 요청으로 중지")
 
     def _apply_auto_status(self, status: dict[str, object]) -> None:
         message = str(status.get("message") or "")
@@ -544,11 +573,16 @@ class InstagramToolsApp(Tk):
         if self.running_kind:
             messagebox.showinfo(APP_TITLE, "먼저 현재 작업을 중지해 주세요.")
             return
-        messagebox.showinfo(
+        confirmed = messagebox.askyesno(
             APP_TITLE,
-            "Chrome 창을 직접 닫고 앱을 다시 실행한 뒤, 기존 도구의 데이터 지우기 기능을 사용해 주세요. "
-            "실행 중인 공유 브라우저의 프로필은 안전하게 삭제할 수 없습니다.",
+            "전용 Chrome 창을 닫고 저장된 Instagram 로그인과 브라우저 데이터를 지울까요?\n\n"
+            "자동 좋아요와 미팔로워 정리 설정 및 app.log는 유지됩니다.",
         )
+        if not confirmed:
+            return
+        if self.worker.submit("clear_profile"):
+            self._begin_operation("clear_profile", "전용 Chrome 데이터 지우기를 시작합니다.")
+            self.global_status_var.set("전용 Chrome 데이터를 지우는 중입니다.")
 
     def _open_data_folder(self) -> None:
         path = str(self.storage.paths.root)

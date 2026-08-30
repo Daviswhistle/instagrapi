@@ -27,6 +27,8 @@ MIN_WINDOW_HEIGHT = 620
 MAX_WINDOW_HEIGHT = 960
 WINDOW_VERTICAL_MARGIN = 120
 COMPACT_LAYOUT_WINDOW_HEIGHT = 820
+COMPACT_CLEANER_ROWS = 6
+REGULAR_CLEANER_ROWS = 9
 
 
 def use_compact_layout(window_height: int) -> bool:
@@ -79,6 +81,7 @@ class InstagramToolsApp(Tk):
         self.cleaner_config_path = self.storage.paths.root / "non_follower_cleaner.json"
         self.auto_entries: list[ttk.Entry] = []
         self.cleaner_entries: list[ttk.Entry] = []
+        self.log_expanded = False
 
         self._build_variables()
         self._build_ui()
@@ -105,6 +108,9 @@ class InstagramToolsApp(Tk):
         self.cleaner_max_unfollows_var = StringVar(value=str(cleaner_config.max_unfollows_per_run))
         self.cleaner_status_var = StringVar(value="목록 확인 전")
         self.cleaner_counts_var = StringVar(value="팔로워 0 · 팔로잉 0 · 미팔로워 0")
+        self.cleaner_selection_var = StringVar(value="선택 0개 / 전체 0개")
+        self.unfollow_button_text_var = StringVar(value="선택 계정 언팔로우")
+        self.log_toggle_var = StringVar(value="진행 기록 보기")
 
     def _build_ui(self) -> None:
         compact = self.compact_ui
@@ -112,7 +118,8 @@ class InstagramToolsApp(Tk):
         outer_gap = 6 if compact else 10
         tab_padding = 6 if compact else 14
         log_padding = 4 if compact else 8
-        log_height = 2 if compact else 5
+        log_height = 3 if compact else 5
+        self._outer_gap = outer_gap
         self._section_padding = 6 if compact else 12
         self._status_padding = 6 if compact else 10
         self._list_padding = 4 if compact else 8
@@ -169,33 +176,40 @@ class InstagramToolsApp(Tk):
         log_scrollbar.pack(side=RIGHT, fill="y")
 
         self.bottom_bar = ttk.Frame(container)
-        ttk.Label(
+        self.bottom_bar.columnconfigure(0, weight=1)
+        self.bottom_disclaimer = ttk.Label(
             self.bottom_bar,
-            text="비공식 Instagram 웹 인터페이스를 사용하므로 활동 제한이나 호환성 변경이 발생할 수 있습니다.",
-            wraplength=670,
+            text="비공식 Instagram 웹 인터페이스 사용 · 활동 제한·호환성 변경 가능",
+            wraplength=360 if compact else 430,
             justify=LEFT,
-        ).pack(side=LEFT, fill="x", expand=True)
-        self.open_data_button = ttk.Button(
-            self.bottom_bar,
-            text="데이터 폴더 열기",
-            command=self._open_data_folder,
         )
-        self.open_data_button.pack(side=RIGHT)
+        self.bottom_disclaimer.grid(row=0, column=0, sticky="w", padx=(0, 8))
+        self.log_toggle_button = ttk.Button(
+            self.bottom_bar,
+            textvariable=self.log_toggle_var,
+            command=self._toggle_log,
+        )
+        self.log_toggle_button.grid(row=0, column=1, padx=(0, 8))
         self.clear_browser_button = ttk.Button(
             self.bottom_bar,
             text="전용 Chrome 데이터 지우기",
             command=self._clear_browser_data,
         )
-        self.clear_browser_button.pack(side=RIGHT, padx=(0, 8))
+        self.clear_browser_button.grid(row=0, column=2, padx=(0, 8))
+        self.open_data_button = ttk.Button(
+            self.bottom_bar,
+            text="데이터 폴더 열기",
+            command=self._open_data_folder,
+        )
+        self.open_data_button.grid(row=0, column=3)
 
-        # Reserve fixed bottom controls before the notebook consumes the remaining
-        # height. Compact mode also reduces low-value whitespace and log height.
+        # Results are the primary surface. Keep the verbose log collapsed until
+        # the user asks for it so account rows do not compete with diagnostics.
         self.bottom_bar.pack(
             side="bottom",
             fill="x",
             pady=(6 if compact else 8, 0),
         )
-        self.log_frame.pack(side="bottom", fill="both", pady=(outer_gap, 0))
         self.notebook.pack(fill="both", expand=True, pady=(outer_gap, 0))
 
     def _build_auto_tab(self, parent: ttk.Frame) -> None:
@@ -299,7 +313,7 @@ class InstagramToolsApp(Tk):
         self.scan_button.pack(side=LEFT)
         self.unfollow_button = ttk.Button(
             actions,
-            text="선택 계정 언팔로우",
+            textvariable=self.unfollow_button_text_var,
             command=self._start_unfollow,
             state="disabled",
         )
@@ -311,10 +325,6 @@ class InstagramToolsApp(Tk):
             state="disabled",
         )
         self.cleaner_stop_button.pack(side=LEFT, padx=(8, 0))
-        self.select_all_button = ttk.Button(actions, text="전체 선택", command=self._select_all)
-        self.select_all_button.pack(side=RIGHT)
-        self.clear_selection_button = ttk.Button(actions, text="전체 해제", command=self._clear_selection)
-        self.clear_selection_button.pack(side=RIGHT, padx=(0, 8))
 
         self.cleaner_status_frame = ttk.LabelFrame(
             parent,
@@ -322,15 +332,17 @@ class InstagramToolsApp(Tk):
             padding=self._status_padding,
         )
         self.cleaner_status_frame.pack(fill="x")
+        status_line = ttk.Frame(self.cleaner_status_frame)
+        status_line.pack(fill="x")
         ttk.Label(
-            self.cleaner_status_frame,
+            status_line,
             textvariable=self.cleaner_status_var,
             font=("", 10, "bold"),
-        ).pack(anchor="w")
+        ).pack(side=LEFT)
         ttk.Label(
-            self.cleaner_status_frame,
+            status_line,
             textvariable=self.cleaner_counts_var,
-        ).pack(anchor="w", pady=(self._status_row_pady, 0))
+        ).pack(side=RIGHT, padx=(12, 0))
 
         self.cleaner_list_frame = ttk.LabelFrame(
             parent,
@@ -342,22 +354,55 @@ class InstagramToolsApp(Tk):
             expand=True,
             pady=(self._section_gap, 0),
         )
+
+        self.cleaner_list_toolbar = ttk.Frame(self.cleaner_list_frame)
+        self.cleaner_list_toolbar.pack(fill="x", pady=(0, 4 if self.compact_ui else 6))
+        self.cleaner_selection_label = ttk.Label(
+            self.cleaner_list_toolbar,
+            textvariable=self.cleaner_selection_var,
+            font=("", 10, "bold"),
+        )
+        self.cleaner_selection_label.pack(side=LEFT)
+        ttk.Label(
+            self.cleaner_list_toolbar,
+            text="남길 계정은 선택 해제하세요.",
+        ).pack(side=LEFT, padx=(8, 0))
+        self.select_all_button = ttk.Button(
+            self.cleaner_list_toolbar,
+            text="전체 선택",
+            command=self._select_all,
+            state="disabled",
+        )
+        self.select_all_button.pack(side=RIGHT)
+        self.clear_selection_button = ttk.Button(
+            self.cleaner_list_toolbar,
+            text="전체 해제",
+            command=self._clear_selection,
+            state="disabled",
+        )
+        self.clear_selection_button.pack(side=RIGHT, padx=(0, 8))
+
+        tree_container = ttk.Frame(self.cleaner_list_frame)
+        tree_container.pack(fill="both", expand=True)
+        visible_rows = COMPACT_CLEANER_ROWS if self.compact_ui else REGULAR_CLEANER_ROWS
         self.tree = ttk.Treeview(
-            self.cleaner_list_frame,
+            tree_container,
             columns=("username", "full_name", "private", "verified"),
             show="headings",
             selectmode="extended",
+            height=visible_rows,
+            takefocus=True,
         )
         self.tree.heading("username", text="사용자명")
         self.tree.heading("full_name", text="이름")
         self.tree.heading("private", text="비공개")
         self.tree.heading("verified", text="인증")
-        self.tree.column("username", width=190, anchor="w")
-        self.tree.column("full_name", width=350, anchor="w")
-        self.tree.column("private", width=70, anchor="center")
-        self.tree.column("verified", width=70, anchor="center")
+        self.tree.column("username", width=220, minwidth=140, anchor="w", stretch=True)
+        self.tree.column("full_name", width=350, minwidth=180, anchor="w", stretch=True)
+        self.tree.column("private", width=80, minwidth=70, anchor="center", stretch=False)
+        self.tree.column("verified", width=80, minwidth=70, anchor="center", stretch=False)
         scrollbar = ttk.Scrollbar(
-            self.cleaner_list_frame,
+            tree_container,
             orient="vertical",
             command=self.tree.yview,
         )
@@ -365,6 +410,27 @@ class InstagramToolsApp(Tk):
         self.tree.pack(side=LEFT, fill="both", expand=True)
         scrollbar.pack(side=RIGHT, fill="y")
         self.tree.bind("<<TreeviewSelect>>", lambda _event: self._refresh_controls())
+
+    def _toggle_log(self) -> None:
+        self._set_log_expanded(not self.log_expanded)
+
+    def _set_log_expanded(self, expanded: bool) -> None:
+        expanded = bool(expanded)
+        if self.log_expanded == expanded:
+            return
+        self.log_expanded = expanded
+        if expanded:
+            self.log_frame.pack(
+                side="bottom",
+                fill="both",
+                pady=(self._outer_gap, 0),
+                before=self.notebook,
+            )
+            self.log_toggle_var.set("진행 기록 숨기기")
+            self.log_text.see(END)
+        else:
+            self.log_frame.pack_forget()
+            self.log_toggle_var.set("진행 기록 보기")
 
     def _setting_row(
         self,
@@ -675,27 +741,44 @@ class InstagramToolsApp(Tk):
             self.cleaner_status_var.set(f"언팔로우 완료 · 실제 변경 확인 {succeeded:,}개")
         self._invalidate_results(counts_message="관계가 변경되었습니다 · 목록을 다시 확인해 주세요")
 
+    def _update_cleaner_selection_summary(self) -> tuple[int, int]:
+        total = len(self.tree.get_children())
+        selected = len(self.tree.selection())
+        self.cleaner_selection_var.set(f"선택 {selected:,}개 / 전체 {total:,}개")
+        if selected:
+            self.unfollow_button_text_var.set(f"선택 {selected:,}개 언팔로우")
+        else:
+            self.unfollow_button_text_var.set("선택 계정 언팔로우")
+        return selected, total
+
     def _refresh_controls(self) -> None:
         running = bool(self.running_kind)
+        selected_count, total_count = self._update_cleaner_selection_summary()
         entry_state = "disabled" if running else "normal"
         for entry in self.auto_entries + self.cleaner_entries:
             entry.configure(state=entry_state)
         self.auto_start_button.configure(state="disabled" if running else "normal")
         self.scan_button.configure(state="disabled" if running else "normal")
-        self.select_all_button.configure(state="disabled" if running else "normal")
-        self.clear_selection_button.configure(state="disabled" if running else "normal")
+
+        has_results = bool(self.scanned_viewer_id) and total_count > 0
+        self.select_all_button.configure(
+            state="normal" if not running and has_results and selected_count < total_count else "disabled"
+        )
+        self.clear_selection_button.configure(state="normal" if not running and selected_count > 0 else "disabled")
         self.clear_browser_button.configure(state="disabled" if running else "normal")
         self.auto_stop_button.configure(state="normal" if self.running_kind == "auto_like" else "disabled")
         self.cleaner_stop_button.configure(state="normal" if self.running_kind in {"scan", "unfollow"} else "disabled")
-        can_unfollow = (
-            not running and bool(self.scanned_viewer_id) and bool(self.candidates) and bool(self.tree.selection())
-        )
+        can_unfollow = not running and has_results and selected_count > 0
         self.unfollow_button.configure(state="normal" if can_unfollow else "disabled")
 
     def _select_all(self) -> None:
         children = self.tree.get_children()
         if children:
             self.tree.selection_set(children)
+            first = children[0]
+            self.tree.focus(first)
+            self.tree.see(first)
+            self.tree.focus_set()
         self._refresh_controls()
 
     def _clear_selection(self) -> None:

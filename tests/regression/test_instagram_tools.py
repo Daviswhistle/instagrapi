@@ -384,6 +384,18 @@ class FakeStringVar:
         self.value = value
 
 
+class FakeSelectionTree:
+    def __init__(self, children: tuple[str, ...], selected: tuple[str, ...]) -> None:
+        self.children = children
+        self.selected = selected
+
+    def get_children(self) -> tuple[str, ...]:
+        return self.children
+
+    def selection(self) -> tuple[str, ...]:
+        return self.selected
+
+
 class UnifiedAppStateRegressionTestCase(unittest.TestCase):
     def test_finished_operation_finalizes_only_a_pending_stop_status(self) -> None:
         app = object.__new__(InstagramToolsApp)
@@ -403,6 +415,23 @@ class UnifiedAppStateRegressionTestCase(unittest.TestCase):
 
         self.assertEqual(app.auto_status_var.get(), "오류로 중지")
         self.assertEqual(app.cleaner_status_var.get(), "사용자 요청으로 중지")
+
+    def test_selection_summary_tracks_selected_and_total_accounts(self) -> None:
+        app = object.__new__(InstagramToolsApp)
+        app.tree = FakeSelectionTree(("1", "2", "3"), ("1", "3"))
+        app.cleaner_selection_var = FakeStringVar("")
+        app.unfollow_button_text_var = FakeStringVar("")
+
+        selected, total = app._update_cleaner_selection_summary()
+
+        self.assertEqual((selected, total), (2, 3))
+        self.assertEqual(app.cleaner_selection_var.get(), "선택 2개 / 전체 3개")
+        self.assertEqual(app.unfollow_button_text_var.get(), "선택 2개 언팔로우")
+
+        app.tree.selected = ()
+        app._update_cleaner_selection_summary()
+        self.assertEqual(app.cleaner_selection_var.get(), "선택 0개 / 전체 3개")
+        self.assertEqual(app.unfollow_button_text_var.get(), "선택 계정 언팔로우")
 
     def test_window_height_fits_a_1366_by_768_laptop_display(self) -> None:
         height = window_height_for_screen(768)

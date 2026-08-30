@@ -2,9 +2,10 @@
 
 내가 팔로우하지만 나를 팔로우하지 않는 Instagram 계정을 찾고, 목록을 검토한 뒤 선택한 계정만 언팔로우하는 데스크톱 앱입니다.
 
-기존 **팔로잉 자동 좋아요** 앱과 같은 전용 Chrome 프로필, 로그인 상태, 데이터 폴더와
-단일 실행 잠금을 공유합니다. 두 앱을 동시에 실행할 수 없으므로 같은 Chrome 프로필을 함께
-조작하는 상황을 막습니다.
+이 기능은 현재 **Instagram Tools** 통합 앱의 **미팔로워 정리** 탭으로 배포됩니다.
+자동 좋아요와 같은 전용 Chrome 프로필, 로그인 상태, 데이터 폴더와 작업 스레드를 공유하며,
+두 작업을 동시에 실행하지 않아 같은 Chrome 프로필을 함께 조작하는 상황을 막습니다. 이
+디렉터리는 기능 구현과 기존 단독 실행 진입점을 유지하지만 공식 패키지는 통합 앱으로만 생성됩니다.
 
 ## 동작 방식
 
@@ -22,10 +23,12 @@ Instagram이 필터링된 항목 때문에 빈 중간 페이지와 다음 커서
 목록 확인을 실패로 처리합니다. 사용자가 목록을 확인하고 대상을 선택한 뒤에는 그 선택만
 직접 실행하며 관계 목록을 다시 조회하지 않습니다.
 
-각 언팔로우 요청에서 HTTP 2xx가 돌아오면 완료로 기록합니다. Instagram이 JSON을 반환하면
-실패·활동 제한 신호를 검사하고, 성공 응답을 빈 본문·일반 텍스트·HTML로 보내는 경우에는
-HTTP 성공 상태를 사용합니다. 로그인·체크포인트 페이지로 이동하거나 활동 제한 신호가
-확인되면 성공으로 간주하지 않습니다.
+각 언팔로우 요청은 HTTP 2xx만으로 완료 처리하지 않습니다. 응답이 명시적으로
+`following=false`를 확인해 주지 않으면 방금 요청한 계정 하나의 현재 관계를 다시 읽고,
+실제로 팔로우가 해제된 경우에만 성공으로 기록합니다. POST 응답이 제한 시간 안에 도착하지
+않아도 쓰기가 서버에 반영됐을 수 있으므로 같은 사후 확인을 수행합니다. 기본 엔드포인트가
+관계를 바꾸지 않았을 때만 대체 웹 엔드포인트를 한 번 시도하며, 로그인·체크포인트·활동 제한
+신호 또는 확인 불가능한 상태에서는 추가 작업을 중지합니다.
 
 ## 기본 설정
 
@@ -42,26 +45,23 @@ HTTP 성공 상태를 사용합니다. 로그인·체크포인트 페이지로 �
 
 ## 가장 쉬운 사용법
 
-저장소의 Releases 또는 GitHub Actions 산출물에서 운영체제에 맞는 패키지를 받습니다.
+저장소의 Releases 또는 GitHub Actions에서 운영체제에 맞는 통합 패키지를 받습니다.
 
-- Windows: `NonFollowerCleaner-Windows.zip`
-- Apple Silicon Mac: `NonFollowerCleaner-macOS-Apple-Silicon.dmg`
-- Intel Mac: `NonFollowerCleaner-macOS-Intel.dmg`
+- Windows: `InstagramTools-Windows`
+- Apple Silicon Mac: `InstagramTools-macOS-Apple-Silicon`
+- Intel Mac: `InstagramTools-macOS-Intel`
 
-GitHub Actions의 산출물은 GitHub가 한 번 더 ZIP으로 감싸서 제공합니다. Actions에서 받은 ZIP은
-한 번만 풀면 Windows에서는 앱 ZIP, macOS에서는 DMG가 나옵니다. Mac에서는 DMG를 열고
-`NonFollowerCleaner.app`을 `Applications`로 옮긴 뒤 실행합니다. Releases에서는 DMG를 직접 받을 수 있습니다.
+Windows Actions 산출물은 실행 폴더를 GitHub가 한 번 ZIP으로 감싼 것이므로 한 번만 풀면
+`InstagramTools.exe`가 나옵니다. macOS Actions 산출물은 GitHub ZIP을 한 번 풀어 DMG를 연 뒤
+`InstagramTools.app`을 `Applications`로 옮깁니다. Releases에서는 Windows ZIP과 두 DMG를
+직접 받을 수 있습니다.
 
-현재 macOS 앱은 Developer ID 서명과 Apple 공증을 하지 않은 빌드입니다. 첫 실행이 차단되면
-다음 순서로 본인이 받은 파일임을 확인한 뒤 예외를 허용합니다.
+현재 macOS 앱은 Developer ID 서명과 Apple 공증을 하지 않았습니다. 첫 실행이 차단되면 앱을
+한 번 실행한 뒤 **시스템 설정 → 개인정보 보호 및 보안 → 보안 → 확인 없이 열기**에서 예외를
+승인합니다. 출처와 파일 무결성을 신뢰할 때만 실행해야 합니다.
 
-1. `Applications`의 `NonFollowerCleaner.app`을 한 번 실행해 차단 경고를 표시합니다.
-2. **Apple 메뉴 → 시스템 설정 → 개인정보 보호 및 보안**으로 이동합니다.
-3. 아래의 **보안** 영역에서 `NonFollowerCleaner`에 대한 **확인 없이 열기(Open Anyway)**를 누릅니다. 이 버튼은 앱 실행을 시도한 뒤 제한된 시간 동안만 표시됩니다.
-4. 로그인 암호 또는 Touch ID로 승인하고, 다시 나타나는 경고에서 **열기**를 누릅니다.
-
-출처를 신뢰하고 파일이 변조되지 않았다고 확신할 때만 이 예외를 허용해야 합니다. 앱을 실행한 뒤
-**목록 확인**을 누르고, 첫 사용이면 열린 Chrome에서 직접 로그인합니다. 이후에는 기존 로그인 상태를 재사용합니다.
+통합 앱의 **미팔로워 정리** 탭에서 **목록 확인**을 누르고, 첫 사용이면 열린 Chrome에서 직접
+로그인합니다. 이후에는 자동 좋아요 탭과 같은 Chrome 창과 로그인 상태를 재사용합니다.
 
 ## 저장 데이터
 
@@ -85,7 +85,7 @@ Python 3.10 이상과 Google Chrome이 필요합니다.
 ```bash
 python -m pip install -e .
 python -m pip install -r apps/following_auto_liker/requirements.txt
-python -m apps.non_follower_cleaner.app
+python -m apps.instagram_tools.app
 ```
 
 테스트:
@@ -101,19 +101,18 @@ python -m unittest -v \
 ```bash
 python -m pip install pyinstaller
 pyinstaller --noconfirm --clean --windowed --onedir \
-  --name NonFollowerCleaner --paths . \
+  --name InstagramTools --paths . \
   --collect-all playwright --copy-metadata playwright \
-  apps/non_follower_cleaner/app.py
+  apps/instagram_tools/app.py
 ```
 
 ## 배포 빌드
 
-`.github/workflows/non-follower-cleaner.yml`은 Windows ZIP과 Apple Silicon/Intel macOS DMG를 만듭니다.
-macOS 빌드는 `hdiutil verify`까지 통과해야 산출물로 업로드됩니다.
+`.github/workflows/instagram-tools.yml`이 자동 좋아요와 미팔로워 정리를 함께 담은 통합 패키지를 만듭니다.
 
-- Pull request와 `master` 반영 시: 테스트 후 Actions 산출물 생성
-- 수동 실행: Actions의 `Non-Follower Cleaner`에서 `Run workflow`
-- `non-follower-cleaner-v*` 태그 푸시 시: 세 운영체제 패키지를 GitHub Release로 게시
+- Pull request와 `master` 반영 시: 회귀 테스트 후 Windows와 Apple Silicon/Intel macOS 산출물 생성
+- 수동 실행: Actions의 `Instagram Tools`에서 `Run workflow`
+- `instagram-tools-v*` 태그 푸시 시: `InstagramTools-Windows.zip`과 두 macOS DMG를 GitHub Release로 게시
 
 ## 중요한 위험
 

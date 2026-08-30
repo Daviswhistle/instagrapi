@@ -1,0 +1,242 @@
+name: Instagram Tools
+
+on:
+  workflow_dispatch: {}
+  pull_request:
+    paths:
+      - "apps/instagram_tools/**"
+      - "apps/following_auto_liker/**"
+      - "apps/non_follower_cleaner/**"
+      - "apps/following_auto_liker/README.md"
+      - "apps/non_follower_cleaner/README.md"
+      - "tests/regression/test_instagram_tools.py"
+      - "tests/regression/test_instagram_tools_final_review.py"
+      - "tests/regression/instagram_tools_layout_smoke.py"
+      - "tests/regression/test_following_auto_liker.py"
+      - "tests/regression/test_non_follower_cleaner*.py"
+      - ".github/workflows/instagram-tools.yml"
+      - ".github/workflows/following-auto-liker.yml"
+      - ".github/workflows/non-follower-cleaner.yml"
+  push:
+    branches: ["master"]
+    tags: ["instagram-tools-v*"]
+    paths:
+      - "apps/instagram_tools/**"
+      - "apps/following_auto_liker/**"
+      - "apps/non_follower_cleaner/**"
+      - "apps/following_auto_liker/README.md"
+      - "apps/non_follower_cleaner/README.md"
+      - "tests/regression/test_instagram_tools.py"
+      - "tests/regression/test_instagram_tools_final_review.py"
+      - "tests/regression/instagram_tools_layout_smoke.py"
+      - "tests/regression/test_following_auto_liker.py"
+      - "tests/regression/test_non_follower_cleaner*.py"
+      - ".github/workflows/instagram-tools.yml"
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.13.5"
+  RUFF_VERSION: "0.16.2"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install . "ruff==${RUFF_VERSION}"
+          python -m pip install -r apps/following_auto_liker/requirements.txt
+      - name: Lint and format check
+        run: |
+          ruff check \
+            apps/instagram_tools \
+            apps/following_auto_liker \
+            apps/non_follower_cleaner \
+            tests/regression/test_instagram_tools.py \
+            tests/regression/test_instagram_tools_final_review.py \
+            tests/regression/instagram_tools_layout_smoke.py \
+            tests/regression/test_following_auto_liker.py \
+            tests/regression/test_non_follower_cleaner*.py
+          ruff format --check \
+            apps/instagram_tools \
+            apps/following_auto_liker \
+            apps/non_follower_cleaner \
+            tests/regression/test_instagram_tools.py \
+            tests/regression/test_instagram_tools_final_review.py \
+            tests/regression/instagram_tools_layout_smoke.py \
+            tests/regression/test_following_auto_liker.py \
+            tests/regression/test_non_follower_cleaner*.py
+      - name: Compile and import smoke test
+        run: |
+          python -m compileall -q \
+            apps/instagram_tools \
+            apps/following_auto_liker \
+            apps/non_follower_cleaner \
+            tests/regression/test_instagram_tools.py \
+            tests/regression/test_instagram_tools_final_review.py \
+            tests/regression/instagram_tools_layout_smoke.py
+          python - <<'PY'
+          from apps.instagram_tools.app import InstagramToolsApp
+          from apps.instagram_tools.browser import SharedChromeBrowserSession, VerifiedFriendshipBackend
+          from apps.instagram_tools.worker import InstagramAutomationWorker
+
+          assert InstagramToolsApp
+          assert SharedChromeBrowserSession
+          assert VerifiedFriendshipBackend
+          assert InstagramAutomationWorker
+          PY
+      - name: Run desktop application tests
+        run: >-
+          python -m unittest -v
+          tests.regression.test_instagram_tools
+          tests.regression.test_instagram_tools_final_review
+          tests.regression.test_following_auto_liker
+          tests.regression.test_non_follower_cleaner
+          tests.regression.test_non_follower_cleaner_http_success
+      - name: Verify unified distribution documentation
+        run: |
+          ! grep -R "following-auto-liker-v\|non-follower-cleaner-v\|workflows/following-auto-liker.yml\|workflows/non-follower-cleaner.yml" \
+            apps/following_auto_liker/README.md \
+            apps/non_follower_cleaner/README.md
+          grep -q "instagram-tools-v\*" apps/following_auto_liker/README.md
+          grep -q "instagram-tools-v\*" apps/non_follower_cleaner/README.md
+      - name: Verify compact 1366x768 layout
+        run: |
+          if ! command -v xvfb-run >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y xvfb
+          fi
+          xvfb-run -a -s "-screen 0 1366x768x24" \
+            python -m tests.regression.instagram_tools_layout_smoke
+
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact_name: InstagramTools-Windows
+            package_name: ""
+          - os: macos-15
+            artifact_name: InstagramTools-macOS-Apple-Silicon
+            package_name: InstagramTools-macOS-Apple-Silicon.dmg
+          - os: macos-15-intel
+            artifact_name: InstagramTools-macOS-Intel
+            package_name: InstagramTools-macOS-Intel.dmg
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install . pyinstaller
+          python -m pip install -r apps/following_auto_liker/requirements.txt
+      - name: Verify Playwright driver package
+        shell: bash
+        run: |
+          python - <<'PY'
+          from playwright.sync_api import sync_playwright
+
+          with sync_playwright() as playwright:
+              assert playwright.chromium
+          PY
+      - name: Build unified desktop application
+        run: >-
+          pyinstaller --noconfirm --clean --windowed --onedir
+          --name InstagramTools --paths .
+          --collect-all playwright --copy-metadata playwright
+          apps/instagram_tools/app.py
+      - name: Package macOS disk image with retry
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf package
+          mkdir -p package
+          ditto dist/InstagramTools.app package/InstagramTools.app
+          ln -s /Applications package/Applications
+
+          for attempt in 1 2 3; do
+            rm -f "${{ matrix.package_name }}"
+            if hdiutil create \
+              -volname "InstagramTools" \
+              -srcfolder package \
+              -ov \
+              -format UDZO \
+              "${{ matrix.package_name }}"; then
+              hdiutil verify "${{ matrix.package_name }}"
+              exit 0
+            fi
+            echo "hdiutil attempt ${attempt} failed; clearing transient disk-image state before retry"
+            hdiutil detach "/Volumes/InstagramTools" -force || true
+            sleep $((attempt * 5))
+          done
+
+          echo "Could not create the macOS disk image after three attempts" >&2
+          exit 1
+      - name: Upload Windows application directory
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: dist/InstagramTools
+          overwrite: true
+          if-no-files-found: error
+      - name: Upload macOS disk image
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.package_name }}
+          compression-level: 0
+          overwrite: true
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/instagram-tools-v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download platform artifacts
+        uses: actions/download-artifact@v7
+        with:
+          path: release-artifacts
+      - name: Prepare release files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir release-files
+          (
+            cd release-artifacts/InstagramTools-Windows
+            zip -r "$GITHUB_WORKSPACE/release-files/InstagramTools-Windows.zip" .
+          )
+          cp release-artifacts/InstagramTools-macOS-Apple-Silicon/*.dmg release-files/
+          cp release-artifacts/InstagramTools-macOS-Intel/*.dmg release-files/
+          test -f release-files/InstagramTools-Windows.zip
+          test -f release-files/InstagramTools-macOS-Apple-Silicon.dmg
+          test -f release-files/InstagramTools-macOS-Intel.dmg
+          test "$(find release-files -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq 3
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "${GITHUB_REF_NAME}" release-files/*
+          --repo "${GITHUB_REPOSITORY}" --generate-notes
+          --title "Instagram Tools ${GITHUB_REF_NAME}"

@@ -342,6 +342,7 @@ class UnifiedAppStateRegressionTestCase(unittest.TestCase):
         app = object.__new__(InstagramToolsApp)
         app.auto_status_var = FakeStringVar("중지 요청됨")
         app.cleaner_status_var = FakeStringVar("목록 확인 완료")
+        app.stop_requested_kind = "auto_like"
 
         app._finalize_finished_tab_status("auto_like")
 
@@ -350,6 +351,7 @@ class UnifiedAppStateRegressionTestCase(unittest.TestCase):
 
         app.auto_status_var.set("오류로 중지")
         app.cleaner_status_var.set("중지 요청됨")
+        app.stop_requested_kind = "scan"
         app._finalize_finished_tab_status("scan")
 
         self.assertEqual(app.auto_status_var.get(), "오류로 중지")

@@ -51,6 +51,29 @@ class FailedWriteVerificationRegressionTestCase(unittest.TestCase):
         self.assertEqual([call["method"] for call in calls], ["POST", "GET"])
         self.assertTrue(str(calls[1]["path"]).startswith("/api/v1/friendships/show/2/"))
 
+    def test_non_timeout_post_network_error_is_verified_before_retry(self) -> None:
+        session = FakeSession(
+            [
+                {"networkError": "TypeError: Failed to fetch", "timedOut": False},
+                response(
+                    SHOW_URL,
+                    text='{"status":"ok","following":false}',
+                    content_type="application/json",
+                ),
+            ]
+        )
+        backend = VerifiedFriendshipBackend(session)
+
+        payload = backend.unfollow("2")
+
+        self.assertEqual(
+            payload["_transport"]["confirmation"],
+            "post_network_error_friendship_check",
+        )
+        self.assertIs(payload["friendship_status"]["following"], False)
+        calls = [arguments for _script, arguments in session.page.evaluate_calls]
+        self.assertEqual([call["method"] for call in calls], ["POST", "GET"])
+
 
 class FailingUnfollowWorker(InstagramAutomationWorker):
     def _run_unfollow(self, _browser, _payload, _stop_event) -> None:
@@ -117,6 +140,7 @@ class ProfileResetErrorIsolationRegressionTestCase(unittest.TestCase):
         app = object.__new__(InstagramToolsApp)
         app.events = queue.Queue()
         app.running_kind = running_kind
+        app.stop_requested_kind = ""
         app.auto_status_var = FakeStringVar("대기 중")
         app.cleaner_status_var = FakeStringVar("목록 확인 완료")
         app.closing = True
@@ -140,6 +164,63 @@ class ProfileResetErrorIsolationRegressionTestCase(unittest.TestCase):
         app._drain_events()
 
         self.assertEqual(app.cleaner_status_var.get(), "오류로 중지")
+
+
+class QueuedProgressAfterStopRegressionTestCase(unittest.TestCase):
+    @staticmethod
+    def app_state(running_kind: str) -> InstagramToolsApp:
+        app = object.__new__(InstagramToolsApp)
+        app.events = queue.Queue()
+        app.running_kind = running_kind
+        app.stop_requested_kind = running_kind
+        app.global_status_var = FakeStringVar("중지 요청됨")
+        app.auto_status_var = FakeStringVar("중지 요청됨")
+        app.auto_likes_var = FakeStringVar("0개")
+        app.auto_last_scan_var = FakeStringVar("아직 없음")
+        app.cleaner_status_var = FakeStringVar("중지 요청됨")
+        app.closing = True
+        app._refresh_controls = Mock()
+        return app
+
+    def test_queued_auto_progress_cannot_erase_stop_completion(self) -> None:
+        app = self.app_state("auto_like")
+        app.events.put(
+            (
+                "auto_status",
+                {
+                    "message": "피드 확인 중",
+                    "session_likes": 2,
+                    "last_scan_at": "",
+                },
+            )
+        )
+
+        app._drain_events()
+
+        self.assertEqual(app.auto_status_var.get(), "중지 요청됨")
+        self.assertEqual(app.auto_likes_var.get(), "2개")
+
+        app.events.put(("operation_finished", "auto_like"))
+        app._drain_events()
+
+        self.assertEqual(app.auto_status_var.get(), "사용자 요청으로 중지")
+        self.assertEqual(app.running_kind, "")
+        self.assertEqual(app.stop_requested_kind, "")
+
+    def test_queued_cleaner_progress_cannot_erase_stop_completion(self) -> None:
+        app = self.app_state("scan")
+        app.events.put(("cleaner_progress", {"phase": "followers", "collected": 25}))
+
+        app._drain_events()
+
+        self.assertEqual(app.cleaner_status_var.get(), "중지 요청됨")
+
+        app.events.put(("operation_finished", "scan"))
+        app._drain_events()
+
+        self.assertEqual(app.cleaner_status_var.get(), "사용자 요청으로 중지")
+        self.assertEqual(app.running_kind, "")
+        self.assertEqual(app.stop_requested_kind, "")
 
 
 if __name__ == "__main__":

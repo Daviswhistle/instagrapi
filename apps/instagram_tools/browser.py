@@ -103,8 +103,19 @@ class BrowserResponse:
             return None
 
 
-class _AmbiguousWriteTimeout(FriendshipRequestError):
-    """A POST may have completed even though the local fetch timed out."""
+class _AmbiguousWriteFailure(FriendshipRequestError):
+    """A POST may have completed even though its response was not observed."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        confirmation: str,
+        diagnostic: str,
+    ) -> None:
+        super().__init__(message)
+        self.confirmation = confirmation
+        self.diagnostic = diagnostic
 
 
 def is_instagram_web_host(hostname: str | None) -> bool:
@@ -249,16 +260,16 @@ class VerifiedFriendshipBackend:
                     csrf_token=csrf_token,
                     include_ig_headers=include_ig_headers,
                 )
-            except _AmbiguousWriteTimeout:
+            except _AmbiguousWriteFailure as exc:
                 confirmation = self._confirm_unfollow_after_write(
                     user_id,
                     attempt_number=attempt_number,
                     status_code=0,
-                    confirmation="post_timeout_friendship_check",
+                    confirmation=exc.confirmation,
                 )
                 if confirmation is not None:
                     return confirmation
-                diagnostics.append(f"시도 {attempt_number}: 요청 시간 초과 후 팔로우 상태가 그대로임")
+                diagnostics.append(f"시도 {attempt_number}: {exc.diagnostic} 후 팔로우 상태가 그대로임")
                 continue
 
             self._require_expected_final_url(response, path)
@@ -408,10 +419,22 @@ class VerifiedFriendshipBackend:
         if result.get("timedOut"):
             message = f"Instagram 네트워크 요청이 {self.request_timeout_seconds:g}초 안에 완료되지 않았습니다."
             if method.upper() == "POST":
-                raise _AmbiguousWriteTimeout(message)
+                raise _AmbiguousWriteFailure(
+                    message,
+                    confirmation="post_timeout_friendship_check",
+                    diagnostic="요청 시간 초과",
+                )
             raise FriendshipRequestError(f"{message} 작업을 중지했습니다.")
         if result.get("networkError"):
-            raise FriendshipRequestError(f"Instagram 네트워크 요청에 실패했습니다: {result['networkError']}")
+            network_error = str(result["networkError"])
+            message = f"Instagram 네트워크 요청에 실패했습니다: {network_error}"
+            if method.upper() == "POST":
+                raise _AmbiguousWriteFailure(
+                    message,
+                    confirmation="post_network_error_friendship_check",
+                    diagnostic=f"네트워크 오류 ({network_error})",
+                )
+            raise FriendshipRequestError(message)
 
         response = BrowserResponse(
             ok=bool(result.get("ok")),

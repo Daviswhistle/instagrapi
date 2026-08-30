@@ -71,6 +71,7 @@ class InstagramToolsApp(Tk):
         self.worker = InstagramAutomationWorker(self.storage, self.events)
         self.worker.start()
         self.running_kind = ""
+        self.stop_requested_kind = ""
         self.closing = False
         self.candidates: dict[str, FriendshipAccount] = {}
         self.scanned_viewer_id = ""
@@ -511,6 +512,7 @@ class InstagramToolsApp(Tk):
             self._begin_operation("unfollow", "선택 계정 언팔로우를 시작합니다.")
 
     def _begin_operation(self, kind: str, log_message: str) -> None:
+        self.stop_requested_kind = ""
         self.running_kind = kind
         self.global_status_var.set("작업 중 · Chrome 한 창을 계속 재사용합니다.")
         self._append_log(log_message)
@@ -519,6 +521,7 @@ class InstagramToolsApp(Tk):
     def _stop(self) -> None:
         if not self.running_kind:
             return
+        self.stop_requested_kind = self.running_kind
         self.worker.stop_current()
         self.global_status_var.set("중지 요청됨")
         if self.running_kind == "auto_like":
@@ -535,16 +538,22 @@ class InstagramToolsApp(Tk):
                 if kind == "log":
                     self._append_log(str(payload))
                 elif kind == "status":
-                    self.global_status_var.set(str(payload))
+                    if not self.stop_requested_kind:
+                        self.global_status_var.set(str(payload))
                 elif kind == "auto_status" and isinstance(payload, dict):
                     self._apply_auto_status(payload)
+                    self._restore_pending_stop_status()
                 elif kind == "cleaner_progress" and isinstance(payload, dict):
                     self._apply_cleaner_progress(payload)
+                    self._restore_pending_stop_status()
                 elif kind == "scan_result" and isinstance(payload, ScanResult):
                     self._apply_scan_result(payload)
+                    self._restore_pending_stop_status()
                 elif kind == "unfollow_result" and isinstance(payload, UnfollowSummary):
                     self._apply_unfollow_result(payload)
+                    self._restore_pending_stop_status()
                 elif kind == "unfollow_error" and isinstance(payload, tuple):
+                    self.stop_requested_kind = ""
                     message, summary = payload
                     if isinstance(summary, UnfollowSummary):
                         self._apply_unfollow_result(summary)
@@ -552,6 +561,7 @@ class InstagramToolsApp(Tk):
                         messagebox.showerror(APP_TITLE, str(message))
                 elif kind == "error":
                     self._append_log(str(payload))
+                    self.stop_requested_kind = ""
                     if self.running_kind == "auto_like":
                         self.auto_status_var.set("오류로 중지")
                     elif self.running_kind in {"scan", "unfollow"}:
@@ -573,6 +583,7 @@ class InstagramToolsApp(Tk):
                 elif kind == "operation_finished":
                     self._finalize_finished_tab_status(payload)
                     self.running_kind = ""
+                    self.stop_requested_kind = ""
                     self.global_status_var.set("대기 중 · Chrome 창을 다음 작업에 재사용합니다.")
                     self._refresh_controls()
                 elif kind == "worker_stopped":
@@ -583,10 +594,18 @@ class InstagramToolsApp(Tk):
         if not self.closing:
             self.after(100, self._drain_events)
 
+    def _restore_pending_stop_status(self) -> None:
+        if self.stop_requested_kind == "auto_like":
+            self.auto_status_var.set("중지 요청됨")
+        elif self.stop_requested_kind in {"scan", "unfollow"}:
+            self.cleaner_status_var.set("중지 요청됨")
+
     def _finalize_finished_tab_status(self, finished_kind: object) -> None:
-        if finished_kind == "auto_like" and self.auto_status_var.get() == "중지 요청됨":
+        if self.stop_requested_kind != finished_kind:
+            return
+        if finished_kind == "auto_like":
             self.auto_status_var.set("사용자 요청으로 중지")
-        elif finished_kind in {"scan", "unfollow"} and self.cleaner_status_var.get() == "중지 요청됨":
+        elif finished_kind in {"scan", "unfollow"}:
             self.cleaner_status_var.set("사용자 요청으로 중지")
 
     def _apply_auto_status(self, status: dict[str, object]) -> None:

@@ -7,6 +7,8 @@ on:
       - "apps/instagram_tools/**"
       - "apps/following_auto_liker/**"
       - "apps/non_follower_cleaner/**"
+      - "apps/following_auto_liker/README.md"
+      - "apps/non_follower_cleaner/README.md"
       - "tests/regression/test_instagram_tools.py"
       - "tests/regression/instagram_tools_layout_smoke.py"
       - "tests/regression/test_following_auto_liker.py"
@@ -21,6 +23,8 @@ on:
       - "apps/instagram_tools/**"
       - "apps/following_auto_liker/**"
       - "apps/non_follower_cleaner/**"
+      - "apps/following_auto_liker/README.md"
+      - "apps/non_follower_cleaner/README.md"
       - "tests/regression/test_instagram_tools.py"
       - "tests/regression/instagram_tools_layout_smoke.py"
       - "tests/regression/test_following_auto_liker.py"
@@ -92,6 +96,13 @@ jobs:
           tests.regression.test_following_auto_liker
           tests.regression.test_non_follower_cleaner
           tests.regression.test_non_follower_cleaner_http_success
+      - name: Verify unified distribution documentation
+        run: |
+          ! grep -R "following-auto-liker-v\|non-follower-cleaner-v\|workflows/following-auto-liker.yml\|workflows/non-follower-cleaner.yml" \
+            apps/following_auto_liker/README.md \
+            apps/non_follower_cleaner/README.md
+          grep -q "instagram-tools-v\*" apps/following_auto_liker/README.md
+          grep -q "instagram-tools-v\*" apps/non_follower_cleaner/README.md
       - name: Verify compact 1366x768 layout
         run: |
           if ! command -v xvfb-run >/dev/null 2>&1; then

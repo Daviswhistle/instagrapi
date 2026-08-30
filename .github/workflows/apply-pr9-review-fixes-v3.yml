@@ -1,0 +1,391 @@
+name: Apply PR 9 Review Fixes v3
+
+on:
+  push:
+    branches: ["fix/unified-instagram-tools"]
+    paths:
+      - ".github/workflows/apply-pr9-review-fixes-v3.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out review branch
+        uses: actions/checkout@v7
+        with:
+          ref: fix/unified-instagram-tools
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13.5"
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install . "ruff==0.16.2"
+          python -m pip install -r apps/following_auto_liker/requirements.txt
+      - name: Apply review fixes and regression tests
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise RuntimeError(f"{label}: expected one match, found {count}")
+              return text.replace(old, new, 1)
+
+
+          app_path = Path("apps/instagram_tools/app.py")
+          app = app_path.read_text(encoding="utf-8")
+          app = replace_once(
+              app,
+              'APP_TITLE = "Instagram 도구"\n\n\ndef configure_logging',
+              'APP_TITLE = "Instagram 도구"\n'
+              'MIN_WINDOW_HEIGHT = 620\n'
+              'MAX_WINDOW_HEIGHT = 820\n'
+              'WINDOW_VERTICAL_MARGIN = 120\n\n\n'
+              'def window_height_for_screen(screen_height: int) -> int:\n'
+              '    return max(\n'
+              '        MIN_WINDOW_HEIGHT,\n'
+              '        min(MAX_WINDOW_HEIGHT, int(screen_height) - WINDOW_VERTICAL_MARGIN),\n'
+              '    )\n\n\n'
+              'def configure_logging',
+              "responsive window height helper",
+          )
+          app = replace_once(
+              app,
+              '        self.geometry("980x860")\n        self.minsize(860, 740)\n',
+              '        self.geometry(f"980x{window_height_for_screen(self.winfo_screenheight())}")\n'
+              '        self.minsize(860, MIN_WINDOW_HEIGHT)\n',
+              "laptop-safe window sizing",
+          )
+          app = replace_once(
+              app,
+              '                elif kind == "operation_finished":\n'
+              '                    self.running_kind = ""\n'
+              '                    self.global_status_var.set("대기 중 · Chrome 창을 다음 작업에 재사용합니다.")\n'
+              '                    self._refresh_controls()\n',
+              '                elif kind == "profile_cleared":\n'
+              '                    self._invalidate_results(\n'
+              '                        counts_message="로그인 정보가 초기화되었습니다 · 목록을 다시 확인해 주세요"\n'
+              '                    )\n'
+              '                    self.auto_status_var.set("로그인 정보 초기화됨")\n'
+              '                    self.cleaner_status_var.set("목록 확인 전")\n'
+              '                    self._append_log("전용 Chrome 데이터와 저장된 Instagram 로그인을 지웠습니다.")\n'
+              '                    if not self.closing:\n'
+              '                        messagebox.showinfo(\n'
+              '                            APP_TITLE,\n'
+              '                            "전용 Chrome 데이터를 지웠습니다. 다음 작업에서 Instagram에 다시 로그인해 주세요.",\n'
+              '                        )\n'
+              '                elif kind == "operation_finished":\n'
+              '                    self._finalize_finished_tab_status(payload)\n'
+              '                    self.running_kind = ""\n'
+              '                    self.global_status_var.set("대기 중 · Chrome 창을 다음 작업에 재사용합니다.")\n'
+              '                    self._refresh_controls()\n',
+              "profile reset event and stopped status finalization",
+          )
+          app = replace_once(
+              app,
+              '    def _apply_auto_status(self, status: dict[str, object]) -> None:\n',
+              '    def _finalize_finished_tab_status(self, finished_kind: object) -> None:\n'
+              '        if finished_kind == "auto_like" and self.auto_status_var.get() == "중지 요청됨":\n'
+              '            self.auto_status_var.set("사용자 요청으로 중지")\n'
+              '        elif (\n'
+              '            finished_kind in {"scan", "unfollow"}\n'
+              '            and self.cleaner_status_var.get() == "중지 요청됨"\n'
+              '        ):\n'
+              '            self.cleaner_status_var.set("사용자 요청으로 중지")\n\n'
+              '    def _apply_auto_status(self, status: dict[str, object]) -> None:\n',
+              "finished tab status helper",
+          )
+          app = replace_once(
+              app,
+              '    def _clear_browser_data(self) -> None:\n'
+              '        if self.running_kind:\n'
+              '            messagebox.showinfo(APP_TITLE, "먼저 현재 작업을 중지해 주세요.")\n'
+              '            return\n'
+              '        messagebox.showinfo(\n'
+              '            APP_TITLE,\n'
+              '            "Chrome 창을 직접 닫고 앱을 다시 실행한 뒤, 기존 도구의 데이터 지우기 기능을 사용해 주세요. "\n'
+              '            "실행 중인 공유 브라우저의 프로필은 안전하게 삭제할 수 없습니다.",\n'
+              '        )\n',
+              '    def _clear_browser_data(self) -> None:\n'
+              '        if self.running_kind:\n'
+              '            messagebox.showinfo(APP_TITLE, "먼저 현재 작업을 중지해 주세요.")\n'
+              '            return\n'
+              '        confirmed = messagebox.askyesno(\n'
+              '            APP_TITLE,\n'
+              '            "전용 Chrome 창을 닫고 저장된 Instagram 로그인과 브라우저 데이터를 지울까요?\\n\\n"\n'
+              '            "자동 좋아요와 미팔로워 정리 설정 및 app.log는 유지됩니다.",\n'
+              '        )\n'
+              '        if not confirmed:\n'
+              '            return\n'
+              '        if self.worker.submit("clear_profile"):\n'
+              '            self._begin_operation("clear_profile", "전용 Chrome 데이터 지우기를 시작합니다.")\n'
+              '            self.global_status_var.set("전용 Chrome 데이터를 지우는 중입니다.")\n',
+              "functional profile reset action",
+          )
+          app_path.write_text(app, encoding="utf-8")
+
+          worker_path = Path("apps/instagram_tools/worker.py")
+          worker = worker_path.read_text(encoding="utf-8")
+          worker = replace_once(worker, "import queue\n", "import logging\nimport queue\n", "worker logging import")
+          worker = replace_once(
+              worker,
+              'OperationKind = Literal["auto_like", "scan", "unfollow"]\n'
+              'EventQueue = queue.Queue[tuple[str, object]]\n'
+              'BrowserFactory = Callable[..., SharedChromeBrowserSession]\n',
+              'OperationKind = Literal["auto_like", "scan", "unfollow", "clear_profile"]\n'
+              'EventQueue = queue.Queue[tuple[str, object]]\n'
+              'BrowserFactory = Callable[..., SharedChromeBrowserSession]\n'
+              'LOGGER = logging.getLogger("instagram_tools.worker")\n',
+              "profile reset command and worker logger",
+          )
+          worker = replace_once(
+              worker,
+              '                try:\n'
+              '                    browser = self._ensure_browser(browser, stop_event)\n'
+              '                    if command.kind == "auto_like":\n'
+              '                        self._run_auto_like(browser, command.payload, stop_event)\n'
+              '                    elif command.kind == "scan":\n'
+              '                        self._run_scan(browser, command.payload, stop_event)\n'
+              '                    elif command.kind == "unfollow":\n'
+              '                        self._run_unfollow(browser, command.payload, stop_event)\n',
+              '                try:\n'
+              '                    if command.kind == "clear_profile":\n'
+              '                        if browser is not None:\n'
+              '                            browser.close()\n'
+              '                        browser = None\n'
+              '                        self.storage.clear_browser_profile()\n'
+              '                        self.events.put(("profile_cleared", None))\n'
+              '                    else:\n'
+              '                        browser = self._ensure_browser(browser, stop_event)\n'
+              '                        if command.kind == "auto_like":\n'
+              '                            self._run_auto_like(browser, command.payload, stop_event)\n'
+              '                        elif command.kind == "scan":\n'
+              '                            self._run_scan(browser, command.payload, stop_event)\n'
+              '                        elif command.kind == "unfollow":\n'
+              '                            self._run_unfollow(browser, command.payload, stop_event)\n',
+              "worker-thread profile reset lifecycle",
+          )
+          worker = replace_once(
+              worker,
+              '                except Exception as exc:\n'
+              '                    self.events.put(\n',
+              '                except Exception as exc:\n'
+              '                    LOGGER.exception("Unexpected worker failure during %s", command.kind)\n'
+              '                    self.events.put(\n',
+              "unexpected exception traceback logging",
+          )
+          worker_path.write_text(worker, encoding="utf-8")
+
+          browser_path = Path("apps/instagram_tools/browser.py")
+          browser = browser_path.read_text(encoding="utf-8")
+          browser = replace_once(
+              browser,
+              '        # A persistent context often already has an authenticated Instagram page.\n'
+              '        # Reusing it avoids the visible blank-page -> Home -> Home reload sequence.\n'
+              '        if not is_instagram_web_host(current_host):\n'
+              '            self._safe_goto(page, INSTAGRAM_HOME_URL)\n\n'
+              '        if self._has_session_cookie() and not self._page_looks_logged_out(page):\n'
+              '            self.on_log("전용 Chrome에 저장된 Instagram 로그인을 사용합니다.")\n'
+              '            return\n\n'
+              '        if not is_instagram_web_host(urlparse(page.url).hostname):\n'
+              '            self._safe_goto(page, INSTAGRAM_HOME_URL)\n',
+              '        # A persistent context often already has an authenticated Instagram page.\n'
+              '        # Reusing it avoids the visible blank-page -> Home -> Home reload sequence.\n'
+              '        navigated_home = False\n'
+              '        if not is_instagram_web_host(current_host):\n'
+              '            self._safe_goto(page, INSTAGRAM_HOME_URL)\n'
+              '            navigated_home = True\n\n'
+              '        if self._has_session_cookie() and not self._page_looks_logged_out(page):\n'
+              '            self.on_log("전용 Chrome에 저장된 Instagram 로그인을 사용합니다.")\n'
+              '            return\n\n'
+              '        if not navigated_home:\n'
+              '            self._safe_goto(page, INSTAGRAM_HOME_URL)\n',
+              "expired session login navigation",
+          )
+          browser_path.write_text(browser, encoding="utf-8")
+
+          tests_path = Path("tests/regression/test_instagram_tools.py")
+          tests = tests_path.read_text(encoding="utf-8")
+          tests = replace_once(
+              tests,
+              'from apps.following_auto_liker.browser import INSTAGRAM_HOME_URL\n'
+              'from apps.instagram_tools.browser import SharedChromeBrowserSession, VerifiedFriendshipBackend\n',
+              'from apps.following_auto_liker.browser import INSTAGRAM_HOME_URL\n'
+              'from apps.instagram_tools.app import InstagramToolsApp, window_height_for_screen\n'
+              'from apps.instagram_tools.browser import SharedChromeBrowserSession, VerifiedFriendshipBackend\n',
+              "unified app test imports",
+          )
+          tests = replace_once(
+              tests,
+              '    def test_non_instagram_start_page_navigates_home_once(self) -> None:\n',
+              '    def test_expired_session_on_web_host_navigates_home_to_show_login(self) -> None:\n'
+              '        page = SimpleNamespace(url="https://www.instagram.com/?variant=following")\n'
+              '        session = SharedChromeBrowserSession(Path("/tmp/instagram-tools-profile"))\n'
+              '        session._require_page = Mock(return_value=page)\n'
+              '        session._has_session_cookie = Mock(side_effect=[False, True])\n'
+              '        session._page_looks_logged_out = Mock(return_value=False)\n'
+              '        session._safe_goto = Mock()\n\n'
+              '        session.wait_until_logged_in(threading.Event())\n\n'
+              '        session._safe_goto.assert_called_once_with(page, INSTAGRAM_HOME_URL)\n\n'
+              '    def test_non_instagram_start_page_navigates_home_once(self) -> None:\n',
+              "expired session regression test",
+          )
+          tests = replace_once(
+              tests,
+              '\n\nclass FakePersistentBrowser:\n',
+              '\n\nclass FakeStringVar:\n'
+              '    def __init__(self, value: str) -> None:\n'
+              '        self.value = value\n\n'
+              '    def get(self) -> str:\n'
+              '        return self.value\n\n'
+              '    def set(self, value: str) -> None:\n'
+              '        self.value = value\n\n\n'
+              'class UnifiedAppStateRegressionTestCase(unittest.TestCase):\n'
+              '    def test_finished_operation_finalizes_only_a_pending_stop_status(self) -> None:\n'
+              '        app = object.__new__(InstagramToolsApp)\n'
+              '        app.auto_status_var = FakeStringVar("중지 요청됨")\n'
+              '        app.cleaner_status_var = FakeStringVar("목록 확인 완료")\n\n'
+              '        app._finalize_finished_tab_status("auto_like")\n\n'
+              '        self.assertEqual(app.auto_status_var.get(), "사용자 요청으로 중지")\n'
+              '        self.assertEqual(app.cleaner_status_var.get(), "목록 확인 완료")\n\n'
+              '        app.auto_status_var.set("오류로 중지")\n'
+              '        app.cleaner_status_var.set("중지 요청됨")\n'
+              '        app._finalize_finished_tab_status("scan")\n\n'
+              '        self.assertEqual(app.auto_status_var.get(), "오류로 중지")\n'
+              '        self.assertEqual(app.cleaner_status_var.get(), "사용자 요청으로 중지")\n\n'
+              '    def test_window_height_fits_a_1366_by_768_laptop_display(self) -> None:\n'
+              '        height = window_height_for_screen(768)\n\n'
+              '        self.assertGreaterEqual(height, 620)\n'
+              '        self.assertLessEqual(height, 680)\n\n\n'
+              'class FakeStorage:\n'
+              '    def __init__(self) -> None:\n'
+              '        self.paths = SimpleNamespace(chrome_profile=Path("/tmp/instagram-tools-profile"))\n'
+              '        self.clear_calls = 0\n\n'
+              '    def clear_browser_profile(self) -> None:\n'
+              '        self.clear_calls += 1\n\n\n'
+              'class FakePersistentBrowser:\n',
+              "app state, sizing, and fake storage regressions",
+          )
+          tests = replace_once(
+              tests,
+              'class RecordingWorker(InstagramAutomationWorker):\n'
+              '    def _run_scan(self, _browser, _payload, _stop_event) -> None:\n'
+              '        return None\n',
+              'class RecordingWorker(InstagramAutomationWorker):\n'
+              '    def _run_scan(self, _browser, _payload, _stop_event) -> None:\n'
+              '        return None\n\n\n'
+              'class FailingWorker(InstagramAutomationWorker):\n'
+              '    def _run_scan(self, _browser, _payload, _stop_event) -> None:\n'
+              '        raise RuntimeError("worker exploded")\n',
+              "unexpected worker failure fixture",
+          )
+          tests = replace_once(
+              tests,
+              '    @staticmethod\n'
+              '    def wait_for_finished(events: queue.Queue[tuple[str, object]], timeout: float = 3.0) -> None:\n'
+              '        deadline = time.monotonic() + timeout\n'
+              '        while time.monotonic() < deadline:\n'
+              '            try:\n'
+              '                kind, _payload = events.get(timeout=0.1)\n'
+              '            except queue.Empty:\n'
+              '                continue\n'
+              '            if kind == "operation_finished":\n'
+              '                return\n'
+              '        raise AssertionError("worker did not finish operation")\n',
+              '    @staticmethod\n'
+              '    def wait_for_finished(\n'
+              '        events: queue.Queue[tuple[str, object]], timeout: float = 3.0\n'
+              '    ) -> list[tuple[str, object]]:\n'
+              '        seen: list[tuple[str, object]] = []\n'
+              '        deadline = time.monotonic() + timeout\n'
+              '        while time.monotonic() < deadline:\n'
+              '            try:\n'
+              '                event = events.get(timeout=0.1)\n'
+              '            except queue.Empty:\n'
+              '                continue\n'
+              '            seen.append(event)\n'
+              '            if event[0] == "operation_finished":\n'
+              '                return seen\n'
+              '        raise AssertionError("worker did not finish operation")\n',
+              "worker event collection helper",
+          )
+          tests = replace_once(
+              tests,
+              '        storage = SimpleNamespace(paths=SimpleNamespace(chrome_profile=Path("/tmp/instagram-tools-profile")))\n',
+              '        storage = FakeStorage()\n',
+              "existing worker fake storage",
+          )
+          tests = replace_once(
+              tests,
+              '\n\nif __name__ == "__main__":\n',
+              '\n\n    def test_profile_clear_closes_browser_and_next_operation_uses_a_fresh_instance(self) -> None:\n'
+              '        events: queue.Queue[tuple[str, object]] = queue.Queue()\n'
+              '        storage = FakeStorage()\n'
+              '        worker = RecordingWorker(storage, events, browser_factory=FakePersistentBrowser)\n'
+              '        worker.start()\n\n'
+              '        self.assertTrue(worker.submit("scan"))\n'
+              '        self.wait_for_finished(events)\n'
+              '        first_browser = FakePersistentBrowser.instances[0]\n\n'
+              '        self.assertTrue(worker.submit("clear_profile"))\n'
+              '        clear_events = self.wait_for_finished(events)\n\n'
+              '        self.assertIn(("profile_cleared", None), clear_events)\n'
+              '        self.assertEqual(storage.clear_calls, 1)\n'
+              '        self.assertEqual(first_browser.closed, 1)\n'
+              '        self.assertEqual(len(FakePersistentBrowser.instances), 1)\n\n'
+              '        self.assertTrue(worker.submit("scan"))\n'
+              '        self.wait_for_finished(events)\n'
+              '        worker.shutdown()\n'
+              '        worker.thread.join(timeout=3)\n\n'
+              '        self.assertFalse(worker.thread.is_alive())\n'
+              '        self.assertEqual(len(FakePersistentBrowser.instances), 2)\n'
+              '        self.assertEqual(FakePersistentBrowser.instances[1].started, 1)\n'
+              '        self.assertEqual(FakePersistentBrowser.instances[1].closed, 1)\n\n'
+              '    def test_unexpected_worker_exception_is_logged_with_traceback(self) -> None:\n'
+              '        events: queue.Queue[tuple[str, object]] = queue.Queue()\n'
+              '        storage = FakeStorage()\n'
+              '        worker = FailingWorker(storage, events, browser_factory=FakePersistentBrowser)\n'
+              '        worker.start()\n\n'
+              '        with self.assertLogs("instagram_tools.worker", level="ERROR") as captured:\n'
+              '            self.assertTrue(worker.submit("scan"))\n'
+              '            self.wait_for_finished(events)\n\n'
+              '        worker.shutdown()\n'
+              '        worker.thread.join(timeout=3)\n\n'
+              '        self.assertFalse(worker.thread.is_alive())\n'
+              '        self.assertIn("RuntimeError: worker exploded", "\\n".join(captured.output))\n\n\n'
+              'if __name__ == "__main__":\n',
+              "profile reset and exception logging tests",
+          )
+          tests_path.write_text(tests, encoding="utf-8")
+          PY
+      - name: Format and lint changed Python files
+        run: |
+          ruff format apps/instagram_tools tests/regression/test_instagram_tools.py
+          ruff check apps/instagram_tools tests/regression/test_instagram_tools.py
+      - name: Run desktop regression suite
+        run: >-
+          python -m unittest -v
+          tests.regression.test_instagram_tools
+          tests.regression.test_following_auto_liker
+          tests.regression.test_non_follower_cleaner
+          tests.regression.test_non_follower_cleaner_http_success
+      - name: Commit fixes and remove temporary workflow
+        shell: bash
+        env:
+          WORKFLOW_PATH: .github/workflows/apply-pr9-review-fixes-v3.yml
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm --ignore-unmatch "$WORKFLOW_PATH"
+          git add apps/instagram_tools/app.py apps/instagram_tools/browser.py apps/instagram_tools/worker.py tests/regression/test_instagram_tools.py
+          git diff --cached --check
+          git commit -m "fix: address latest PR 9 review findings"
+          git push origin HEAD:fix/unified-instagram-tools

@@ -21,6 +21,7 @@ WEB_ASBD_ID = "129477"
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 20.0
 POST_CONFIRMATION_DELAY_MS = 350
 INSTAGRAM_WEB_HOST = urlparse(INSTAGRAM_HOME_URL).hostname or "www.instagram.com"
+INSTAGRAM_WEB_ORIGIN = "https://www.instagram.com"
 
 _RESTRICTION_MARKERS = (
     "feedback_required",
@@ -39,7 +40,18 @@ _RESTRICTION_MARKERS = (
 )
 
 _BROWSER_REQUEST_SCRIPT = r"""
-async ({path, method, csrfToken, appId, asbdId, timeoutMs, includeIgHeaders}) => {
+async ({path, method, csrfToken, appId, asbdId, timeoutMs, includeIgHeaders, expectedOrigin}) => {
+  // Check inside the page immediately before constructing headers. The Python
+  // caller performs the same check first, while this guard closes the navigation
+  // race between reading page.url and executing this function.
+  if (window.location.origin !== expectedOrigin) {
+    return {originError: window.location.href};
+  }
+  const requestUrl = new URL(path, `${expectedOrigin}/`);
+  if (requestUrl.origin !== expectedOrigin) {
+    return {originError: window.location.href};
+  }
+
   const headers = {
     "Accept": "*/*",
     "X-Requested-With": "XMLHttpRequest"
@@ -62,7 +74,7 @@ async ({path, method, csrfToken, appId, asbdId, timeoutMs, includeIgHeaders}) =>
   }, timeoutMs);
 
   try {
-    const response = await fetch(path, {
+    const response = await fetch(requestUrl.href, {
       method,
       headers,
       credentials: "include",
@@ -122,6 +134,15 @@ def is_instagram_web_host(hostname: str | None) -> bool:
     return str(hostname or "").casefold().rstrip(".") == INSTAGRAM_WEB_HOST.casefold()
 
 
+def is_instagram_web_url(url: str) -> bool:
+    parsed = urlparse(str(url or ""))
+    try:
+        port = parsed.port
+    except ValueError:
+        return False
+    return parsed.scheme.casefold() == "https" and is_instagram_web_host(parsed.hostname) and port in {None, 443}
+
+
 class SharedChromeBrowserSession(ChromeBrowserSession):
     """Keep one Chrome context alive and avoid navigating to Home twice."""
 
@@ -136,12 +157,11 @@ class SharedChromeBrowserSession(ChromeBrowserSession):
 
     def wait_until_logged_in(self, stop_event: threading.Event) -> None:
         page = self._require_page(create_if_missing=True)
-        current_host = urlparse(page.url).hostname
 
         # A persistent context often already has an authenticated Instagram page.
         # Reusing it avoids the visible blank-page -> Home -> Home reload sequence.
         navigated_home = False
-        if not is_instagram_web_host(current_host):
+        if not is_instagram_web_url(page.url):
             self._safe_goto(page, INSTAGRAM_HOME_URL)
             navigated_home = True
 
@@ -184,7 +204,7 @@ class VerifiedFriendshipBackend:
 
     def prepare(self) -> None:
         page = self.session._require_page(create_if_missing=True)
-        if not is_instagram_web_host(urlparse(page.url).hostname):
+        if not is_instagram_web_url(page.url):
             self.session._safe_goto(page, INSTAGRAM_HOME_URL)
         try:
             page.wait_for_timeout(250)
@@ -396,6 +416,11 @@ class VerifiedFriendshipBackend:
         if honor_stop:
             self._raise_if_stopped()
         page = self.session._require_page()
+        if not is_instagram_web_url(page.url):
+            raise FriendshipRequestError(
+                "Instagram 요청 전에 전용 Chrome 탭이 다른 사이트로 이동했습니다. "
+                "Instagram 화면으로 돌아간 뒤 다시 시도해 주세요."
+            )
         try:
             result = page.evaluate(
                 _BROWSER_REQUEST_SCRIPT,
@@ -407,6 +432,7 @@ class VerifiedFriendshipBackend:
                     "asbdId": WEB_ASBD_ID,
                     "timeoutMs": self.request_timeout_ms,
                     "includeIgHeaders": include_ig_headers,
+                    "expectedOrigin": INSTAGRAM_WEB_ORIGIN,
                 },
             )
         except Exception as exc:
@@ -416,6 +442,11 @@ class VerifiedFriendshipBackend:
             self._raise_if_stopped()
         if not isinstance(result, dict):
             raise FriendshipRequestError("Instagram 요청 결과를 읽지 못했습니다.")
+        if result.get("originError"):
+            raise FriendshipRequestError(
+                "Instagram 요청 중 전용 Chrome 탭이 다른 사이트로 이동해 작업을 중지했습니다. "
+                "Instagram 화면으로 돌아간 뒤 다시 시도해 주세요."
+            )
         if result.get("timedOut"):
             message = f"Instagram 네트워크 요청이 {self.request_timeout_seconds:g}초 안에 완료되지 않았습니다."
             if method.upper() == "POST":

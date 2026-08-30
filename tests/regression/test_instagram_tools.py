@@ -30,6 +30,7 @@ FALLBACK_URL = "https://www.instagram.com/web/friendships/2/unfollow/"
 class FakePage:
     def __init__(self, responses: list[dict[str, object]]) -> None:
         self.responses = list(responses)
+        self.url = "https://www.instagram.com/"
         self.evaluate_calls: list[tuple[str, dict[str, object]]] = []
         self.wait_calls: list[int] = []
 
@@ -97,6 +98,29 @@ class VerifiedUnfollowRegressionTestCase(unittest.TestCase):
         self.assertEqual(backend.unfollow("2"), payload)
         self.assertEqual(len(session.page.evaluate_calls), 1)
         self.assertEqual(session.page.wait_calls, [])
+
+    def test_off_origin_page_is_rejected_before_sensitive_evaluate(self) -> None:
+        backend, session = self.backend([])
+        session.page.url = "https://example.com/account"
+
+        with self.assertRaises(FriendshipRequestError) as raised:
+            backend.unfollow("2")
+
+        self.assertIn("다른 사이트", str(raised.exception))
+        self.assertEqual(session.page.evaluate_calls, [])
+
+    def test_navigation_race_is_rejected_inside_browser_evaluate(self) -> None:
+        backend, session = self.backend([{"originError": "https://example.com/"}])
+
+        with self.assertRaises(FriendshipRequestError) as raised:
+            backend.unfollow("2")
+
+        self.assertIn("다른 사이트", str(raised.exception))
+        self.assertEqual(len(session.page.evaluate_calls), 1)
+        script, arguments = session.page.evaluate_calls[0]
+        self.assertEqual(arguments["expectedOrigin"], "https://www.instagram.com")
+        self.assertIn("window.location.origin", script)
+        self.assertIn("fetch(requestUrl.href", script)
 
     def test_top_level_unfollow_confirmation_is_normalized_for_the_cleaner(self) -> None:
         payload = {"status": "ok", "following": False}
